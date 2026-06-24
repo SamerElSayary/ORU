@@ -1,0 +1,2893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ORU · Parametric Origami Studio</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* THREE.TransformControls r128 (inlined for offline 3ds-max-style gizmos) */
+( function () {
+
+	const _raycaster = new THREE.Raycaster();
+
+	const _tempVector = new THREE.Vector3();
+
+	const _tempVector2 = new THREE.Vector3();
+
+	const _tempQuaternion = new THREE.Quaternion();
+
+	const _unit = {
+		X: new THREE.Vector3( 1, 0, 0 ),
+		Y: new THREE.Vector3( 0, 1, 0 ),
+		Z: new THREE.Vector3( 0, 0, 1 )
+	};
+	const _changeEvent = {
+		type: 'change'
+	};
+	const _mouseDownEvent = {
+		type: 'mouseDown'
+	};
+	const _mouseUpEvent = {
+		type: 'mouseUp',
+		mode: null
+	};
+	const _objectChangeEvent = {
+		type: 'objectChange'
+	};
+
+	class TransformControls extends THREE.Object3D {
+
+		constructor( camera, domElement ) {
+
+			super();
+
+			if ( domElement === undefined ) {
+
+				console.warn( 'THREE.TransformControls: The second parameter "domElement" is now mandatory.' );
+				domElement = document;
+
+			}
+
+			this.visible = false;
+			this.domElement = domElement;
+
+			const _gizmo = new TransformControlsGizmo();
+
+			this._gizmo = _gizmo;
+			this.add( _gizmo );
+
+			const _plane = new TransformControlsPlane();
+
+			this._plane = _plane;
+			this.add( _plane );
+			const scope = this; // Defined getter, setter and store for a property
+
+			function defineProperty( propName, defaultValue ) {
+
+				let propValue = defaultValue;
+				Object.defineProperty( scope, propName, {
+					get: function () {
+
+						return propValue !== undefined ? propValue : defaultValue;
+
+					},
+					set: function ( value ) {
+
+						if ( propValue !== value ) {
+
+							propValue = value;
+							_plane[ propName ] = value;
+							_gizmo[ propName ] = value;
+							scope.dispatchEvent( {
+								type: propName + '-changed',
+								value: value
+							} );
+							scope.dispatchEvent( _changeEvent );
+
+						}
+
+					}
+				} );
+				scope[ propName ] = defaultValue;
+				_plane[ propName ] = defaultValue;
+				_gizmo[ propName ] = defaultValue;
+
+			} // Define properties with getters/setter
+			// Setting the defined property will automatically trigger change event
+			// Defined properties are passed down to gizmo and plane
+
+
+			defineProperty( 'camera', camera );
+			defineProperty( 'object', undefined );
+			defineProperty( 'enabled', true );
+			defineProperty( 'axis', null );
+			defineProperty( 'mode', 'translate' );
+			defineProperty( 'translationSnap', null );
+			defineProperty( 'rotationSnap', null );
+			defineProperty( 'scaleSnap', null );
+			defineProperty( 'space', 'world' );
+			defineProperty( 'size', 1 );
+			defineProperty( 'dragging', false );
+			defineProperty( 'showX', true );
+			defineProperty( 'showY', true );
+			defineProperty( 'showZ', true ); // Reusable utility variables
+
+			const worldPosition = new THREE.Vector3();
+			const worldPositionStart = new THREE.Vector3();
+			const worldQuaternion = new THREE.Quaternion();
+			const worldQuaternionStart = new THREE.Quaternion();
+			const cameraPosition = new THREE.Vector3();
+			const cameraQuaternion = new THREE.Quaternion();
+			const pointStart = new THREE.Vector3();
+			const pointEnd = new THREE.Vector3();
+			const rotationAxis = new THREE.Vector3();
+			const rotationAngle = 0;
+			const eye = new THREE.Vector3(); // TODO: remove properties unused in plane and gizmo
+
+			defineProperty( 'worldPosition', worldPosition );
+			defineProperty( 'worldPositionStart', worldPositionStart );
+			defineProperty( 'worldQuaternion', worldQuaternion );
+			defineProperty( 'worldQuaternionStart', worldQuaternionStart );
+			defineProperty( 'cameraPosition', cameraPosition );
+			defineProperty( 'cameraQuaternion', cameraQuaternion );
+			defineProperty( 'pointStart', pointStart );
+			defineProperty( 'pointEnd', pointEnd );
+			defineProperty( 'rotationAxis', rotationAxis );
+			defineProperty( 'rotationAngle', rotationAngle );
+			defineProperty( 'eye', eye );
+			this._offset = new THREE.Vector3();
+			this._startNorm = new THREE.Vector3();
+			this._endNorm = new THREE.Vector3();
+			this._cameraScale = new THREE.Vector3();
+			this._parentPosition = new THREE.Vector3();
+			this._parentQuaternion = new THREE.Quaternion();
+			this._parentQuaternionInv = new THREE.Quaternion();
+			this._parentScale = new THREE.Vector3();
+			this._worldScaleStart = new THREE.Vector3();
+			this._worldQuaternionInv = new THREE.Quaternion();
+			this._worldScale = new THREE.Vector3();
+			this._positionStart = new THREE.Vector3();
+			this._quaternionStart = new THREE.Quaternion();
+			this._scaleStart = new THREE.Vector3();
+			this._getPointer = getPointer.bind( this );
+			this._onPointerDown = onPointerDown.bind( this );
+			this._onPointerHover = onPointerHover.bind( this );
+			this._onPointerMove = onPointerMove.bind( this );
+			this._onPointerUp = onPointerUp.bind( this );
+			this.domElement.addEventListener( 'pointerdown', this._onPointerDown );
+			this.domElement.addEventListener( 'pointermove', this._onPointerHover );
+			this.domElement.ownerDocument.addEventListener( 'pointerup', this._onPointerUp );
+
+		} // updateMatrixWorld  updates key transformation variables
+
+
+		updateMatrixWorld() {
+
+			if ( this.object !== undefined ) {
+
+				this.object.updateMatrixWorld();
+
+				if ( this.object.parent === null ) {
+
+					console.error( 'TransformControls: The attached 3D object must be a part of the scene graph.' );
+
+				} else {
+
+					this.object.parent.matrixWorld.decompose( this._parentPosition, this._parentQuaternion, this._parentScale );
+
+				}
+
+				this.object.matrixWorld.decompose( this.worldPosition, this.worldQuaternion, this._worldScale );
+
+				this._parentQuaternionInv.copy( this._parentQuaternion ).invert();
+
+				this._worldQuaternionInv.copy( this.worldQuaternion ).invert();
+
+			}
+
+			this.camera.updateMatrixWorld();
+			this.camera.matrixWorld.decompose( this.cameraPosition, this.cameraQuaternion, this._cameraScale );
+			this.eye.copy( this.cameraPosition ).sub( this.worldPosition ).normalize();
+			super.updateMatrixWorld( this );
+
+		}
+
+		pointerHover( pointer ) {
+
+			if ( this.object === undefined || this.dragging === true ) return;
+
+			_raycaster.setFromCamera( pointer, this.camera );
+
+			const intersect = intersectObjectWithRay( this._gizmo.picker[ this.mode ], _raycaster );
+
+			if ( intersect ) {
+
+				this.axis = intersect.object.name;
+
+			} else {
+
+				this.axis = null;
+
+			}
+
+		}
+
+		pointerDown( pointer ) {
+
+			if ( this.object === undefined || this.dragging === true || pointer.button !== 0 ) return;
+
+			if ( this.axis !== null ) {
+
+				_raycaster.setFromCamera( pointer, this.camera );
+
+				const planeIntersect = intersectObjectWithRay( this._plane, _raycaster, true );
+
+				if ( planeIntersect ) {
+
+					let space = this.space;
+
+					if ( this.mode === 'scale' ) {
+
+						space = 'local';
+
+					} else if ( this.axis === 'E' || this.axis === 'XYZE' || this.axis === 'XYZ' ) {
+
+						space = 'world';
+
+					}
+
+					if ( space === 'local' && this.mode === 'rotate' ) {
+
+						const snap = this.rotationSnap;
+						if ( this.axis === 'X' && snap ) this.object.rotation.x = Math.round( this.object.rotation.x / snap ) * snap;
+						if ( this.axis === 'Y' && snap ) this.object.rotation.y = Math.round( this.object.rotation.y / snap ) * snap;
+						if ( this.axis === 'Z' && snap ) this.object.rotation.z = Math.round( this.object.rotation.z / snap ) * snap;
+
+					}
+
+					this.object.updateMatrixWorld();
+					this.object.parent.updateMatrixWorld();
+
+					this._positionStart.copy( this.object.position );
+
+					this._quaternionStart.copy( this.object.quaternion );
+
+					this._scaleStart.copy( this.object.scale );
+
+					this.object.matrixWorld.decompose( this.worldPositionStart, this.worldQuaternionStart, this._worldScaleStart );
+					this.pointStart.copy( planeIntersect.point ).sub( this.worldPositionStart );
+
+				}
+
+				this.dragging = true;
+				_mouseDownEvent.mode = this.mode;
+				this.dispatchEvent( _mouseDownEvent );
+
+			}
+
+		}
+
+		pointerMove( pointer ) {
+
+			const axis = this.axis;
+			const mode = this.mode;
+			const object = this.object;
+			let space = this.space;
+
+			if ( mode === 'scale' ) {
+
+				space = 'local';
+
+			} else if ( axis === 'E' || axis === 'XYZE' || axis === 'XYZ' ) {
+
+				space = 'world';
+
+			}
+
+			if ( object === undefined || axis === null || this.dragging === false || pointer.button !== - 1 ) return;
+
+			_raycaster.setFromCamera( pointer, this.camera );
+
+			const planeIntersect = intersectObjectWithRay( this._plane, _raycaster, true );
+			if ( ! planeIntersect ) return;
+			this.pointEnd.copy( planeIntersect.point ).sub( this.worldPositionStart );
+
+			if ( mode === 'translate' ) {
+
+				// Apply translate
+				this._offset.copy( this.pointEnd ).sub( this.pointStart );
+
+				if ( space === 'local' && axis !== 'XYZ' ) {
+
+					this._offset.applyQuaternion( this._worldQuaternionInv );
+
+				}
+
+				if ( axis.indexOf( 'X' ) === - 1 ) this._offset.x = 0;
+				if ( axis.indexOf( 'Y' ) === - 1 ) this._offset.y = 0;
+				if ( axis.indexOf( 'Z' ) === - 1 ) this._offset.z = 0;
+
+				if ( space === 'local' && axis !== 'XYZ' ) {
+
+					this._offset.applyQuaternion( this._quaternionStart ).divide( this._parentScale );
+
+				} else {
+
+					this._offset.applyQuaternion( this._parentQuaternionInv ).divide( this._parentScale );
+
+				}
+
+				object.position.copy( this._offset ).add( this._positionStart ); // Apply translation snap
+
+				if ( this.translationSnap ) {
+
+					if ( space === 'local' ) {
+
+						object.position.applyQuaternion( _tempQuaternion.copy( this._quaternionStart ).invert() );
+
+						if ( axis.search( 'X' ) !== - 1 ) {
+
+							object.position.x = Math.round( object.position.x / this.translationSnap ) * this.translationSnap;
+
+						}
+
+						if ( axis.search( 'Y' ) !== - 1 ) {
+
+							object.position.y = Math.round( object.position.y / this.translationSnap ) * this.translationSnap;
+
+						}
+
+						if ( axis.search( 'Z' ) !== - 1 ) {
+
+							object.position.z = Math.round( object.position.z / this.translationSnap ) * this.translationSnap;
+
+						}
+
+						object.position.applyQuaternion( this._quaternionStart );
+
+					}
+
+					if ( space === 'world' ) {
+
+						if ( object.parent ) {
+
+							object.position.add( _tempVector.setFromMatrixPosition( object.parent.matrixWorld ) );
+
+						}
+
+						if ( axis.search( 'X' ) !== - 1 ) {
+
+							object.position.x = Math.round( object.position.x / this.translationSnap ) * this.translationSnap;
+
+						}
+
+						if ( axis.search( 'Y' ) !== - 1 ) {
+
+							object.position.y = Math.round( object.position.y / this.translationSnap ) * this.translationSnap;
+
+						}
+
+						if ( axis.search( 'Z' ) !== - 1 ) {
+
+							object.position.z = Math.round( object.position.z / this.translationSnap ) * this.translationSnap;
+
+						}
+
+						if ( object.parent ) {
+
+							object.position.sub( _tempVector.setFromMatrixPosition( object.parent.matrixWorld ) );
+
+						}
+
+					}
+
+				}
+
+			} else if ( mode === 'scale' ) {
+
+				if ( axis.search( 'XYZ' ) !== - 1 ) {
+
+					let d = this.pointEnd.length() / this.pointStart.length();
+					if ( this.pointEnd.dot( this.pointStart ) < 0 ) d *= - 1;
+
+					_tempVector2.set( d, d, d );
+
+				} else {
+
+					_tempVector.copy( this.pointStart );
+
+					_tempVector2.copy( this.pointEnd );
+
+					_tempVector.applyQuaternion( this._worldQuaternionInv );
+
+					_tempVector2.applyQuaternion( this._worldQuaternionInv );
+
+					_tempVector2.divide( _tempVector );
+
+					if ( axis.search( 'X' ) === - 1 ) {
+
+						_tempVector2.x = 1;
+
+					}
+
+					if ( axis.search( 'Y' ) === - 1 ) {
+
+						_tempVector2.y = 1;
+
+					}
+
+					if ( axis.search( 'Z' ) === - 1 ) {
+
+						_tempVector2.z = 1;
+
+					}
+
+				} // Apply scale
+
+
+				object.scale.copy( this._scaleStart ).multiply( _tempVector2 );
+
+				if ( this.scaleSnap ) {
+
+					if ( axis.search( 'X' ) !== - 1 ) {
+
+						object.scale.x = Math.round( object.scale.x / this.scaleSnap ) * this.scaleSnap || this.scaleSnap;
+
+					}
+
+					if ( axis.search( 'Y' ) !== - 1 ) {
+
+						object.scale.y = Math.round( object.scale.y / this.scaleSnap ) * this.scaleSnap || this.scaleSnap;
+
+					}
+
+					if ( axis.search( 'Z' ) !== - 1 ) {
+
+						object.scale.z = Math.round( object.scale.z / this.scaleSnap ) * this.scaleSnap || this.scaleSnap;
+
+					}
+
+				}
+
+			} else if ( mode === 'rotate' ) {
+
+				this._offset.copy( this.pointEnd ).sub( this.pointStart );
+
+				const ROTATION_SPEED = 20 / this.worldPosition.distanceTo( _tempVector.setFromMatrixPosition( this.camera.matrixWorld ) );
+
+				if ( axis === 'E' ) {
+
+					this.rotationAxis.copy( this.eye );
+					this.rotationAngle = this.pointEnd.angleTo( this.pointStart );
+
+					this._startNorm.copy( this.pointStart ).normalize();
+
+					this._endNorm.copy( this.pointEnd ).normalize();
+
+					this.rotationAngle *= this._endNorm.cross( this._startNorm ).dot( this.eye ) < 0 ? 1 : - 1;
+
+				} else if ( axis === 'XYZE' ) {
+
+					this.rotationAxis.copy( this._offset ).cross( this.eye ).normalize();
+					this.rotationAngle = this._offset.dot( _tempVector.copy( this.rotationAxis ).cross( this.eye ) ) * ROTATION_SPEED;
+
+				} else if ( axis === 'X' || axis === 'Y' || axis === 'Z' ) {
+
+					this.rotationAxis.copy( _unit[ axis ] );
+
+					_tempVector.copy( _unit[ axis ] );
+
+					if ( space === 'local' ) {
+
+						_tempVector.applyQuaternion( this.worldQuaternion );
+
+					}
+
+					this.rotationAngle = this._offset.dot( _tempVector.cross( this.eye ).normalize() ) * ROTATION_SPEED;
+
+				} // Apply rotation snap
+
+
+				if ( this.rotationSnap ) this.rotationAngle = Math.round( this.rotationAngle / this.rotationSnap ) * this.rotationSnap; // Apply rotate
+
+				if ( space === 'local' && axis !== 'E' && axis !== 'XYZE' ) {
+
+					object.quaternion.copy( this._quaternionStart );
+					object.quaternion.multiply( _tempQuaternion.setFromAxisAngle( this.rotationAxis, this.rotationAngle ) ).normalize();
+
+				} else {
+
+					this.rotationAxis.applyQuaternion( this._parentQuaternionInv );
+					object.quaternion.copy( _tempQuaternion.setFromAxisAngle( this.rotationAxis, this.rotationAngle ) );
+					object.quaternion.multiply( this._quaternionStart ).normalize();
+
+				}
+
+			}
+
+			this.dispatchEvent( _changeEvent );
+			this.dispatchEvent( _objectChangeEvent );
+
+		}
+
+		pointerUp( pointer ) {
+
+			if ( pointer.button !== 0 ) return;
+
+			if ( this.dragging && this.axis !== null ) {
+
+				_mouseUpEvent.mode = this.mode;
+				this.dispatchEvent( _mouseUpEvent );
+
+			}
+
+			this.dragging = false;
+			this.axis = null;
+
+		}
+
+		dispose() {
+
+			this.domElement.removeEventListener( 'pointerdown', this._onPointerDown );
+			this.domElement.removeEventListener( 'pointermove', this._onPointerHover );
+			this.domElement.ownerDocument.removeEventListener( 'pointermove', this._onPointerMove );
+			this.domElement.ownerDocument.removeEventListener( 'pointerup', this._onPointerUp );
+			this.traverse( function ( child ) {
+
+				if ( child.geometry ) child.geometry.dispose();
+				if ( child.material ) child.material.dispose();
+
+			} );
+
+		} // Set current object
+
+
+		attach( object ) {
+
+			this.object = object;
+			this.visible = true;
+			return this;
+
+		} // Detatch from object
+
+
+		detach() {
+
+			this.object = undefined;
+			this.visible = false;
+			this.axis = null;
+			return this;
+
+		} // TODO: deprecate
+
+
+		getMode() {
+
+			return this.mode;
+
+		}
+
+		setMode( mode ) {
+
+			this.mode = mode;
+
+		}
+
+		setTranslationSnap( translationSnap ) {
+
+			this.translationSnap = translationSnap;
+
+		}
+
+		setRotationSnap( rotationSnap ) {
+
+			this.rotationSnap = rotationSnap;
+
+		}
+
+		setScaleSnap( scaleSnap ) {
+
+			this.scaleSnap = scaleSnap;
+
+		}
+
+		setSize( size ) {
+
+			this.size = size;
+
+		}
+
+		setSpace( space ) {
+
+			this.space = space;
+
+		}
+
+		update() {
+
+			console.warn( 'THREE.TransformControls: update function has no more functionality and therefore has been deprecated.' );
+
+		}
+
+	}
+
+	TransformControls.prototype.isTransformControls = true; // mouse / touch event handlers
+
+	function getPointer( event ) {
+
+		if ( this.domElement.ownerDocument.pointerLockElement ) {
+
+			return {
+				x: 0,
+				y: 0,
+				button: event.button
+			};
+
+		} else {
+
+			const pointer = event.changedTouches ? event.changedTouches[ 0 ] : event;
+			const rect = this.domElement.getBoundingClientRect();
+			return {
+				x: ( pointer.clientX - rect.left ) / rect.width * 2 - 1,
+				y: - ( pointer.clientY - rect.top ) / rect.height * 2 + 1,
+				button: event.button
+			};
+
+		}
+
+	}
+
+	function onPointerHover( event ) {
+
+		if ( ! this.enabled ) return;
+
+		switch ( event.pointerType ) {
+
+			case 'mouse':
+			case 'pen':
+				this.pointerHover( this._getPointer( event ) );
+				break;
+
+		}
+
+	}
+
+	function onPointerDown( event ) {
+
+		if ( ! this.enabled ) return;
+		this.domElement.style.touchAction = 'none'; // disable touch scroll
+
+		this.domElement.ownerDocument.addEventListener( 'pointermove', this._onPointerMove );
+		this.pointerHover( this._getPointer( event ) );
+		this.pointerDown( this._getPointer( event ) );
+
+	}
+
+	function onPointerMove( event ) {
+
+		if ( ! this.enabled ) return;
+		this.pointerMove( this._getPointer( event ) );
+
+	}
+
+	function onPointerUp( event ) {
+
+		if ( ! this.enabled ) return;
+		this.domElement.style.touchAction = '';
+		this.domElement.ownerDocument.removeEventListener( 'pointermove', this._onPointerMove );
+		this.pointerUp( this._getPointer( event ) );
+
+	}
+
+	function intersectObjectWithRay( object, raycaster, includeInvisible ) {
+
+		const allIntersections = raycaster.intersectObject( object, true );
+
+		for ( let i = 0; i < allIntersections.length; i ++ ) {
+
+			if ( allIntersections[ i ].object.visible || includeInvisible ) {
+
+				return allIntersections[ i ];
+
+			}
+
+		}
+
+		return false;
+
+	} //
+	// Reusable utility variables
+
+
+	const _tempEuler = new THREE.Euler();
+
+	const _alignVector = new THREE.Vector3( 0, 1, 0 );
+
+	const _zeroVector = new THREE.Vector3( 0, 0, 0 );
+
+	const _lookAtMatrix = new THREE.Matrix4();
+
+	const _tempQuaternion2 = new THREE.Quaternion();
+
+	const _identityQuaternion = new THREE.Quaternion();
+
+	const _dirVector = new THREE.Vector3();
+
+	const _tempMatrix = new THREE.Matrix4();
+
+	const _unitX = new THREE.Vector3( 1, 0, 0 );
+
+	const _unitY = new THREE.Vector3( 0, 1, 0 );
+
+	const _unitZ = new THREE.Vector3( 0, 0, 1 );
+
+	const _v1 = new THREE.Vector3();
+
+	const _v2 = new THREE.Vector3();
+
+	const _v3 = new THREE.Vector3();
+
+	class TransformControlsGizmo extends THREE.Object3D {
+
+		constructor() {
+
+			super();
+			this.type = 'TransformControlsGizmo'; // shared materials
+
+			const gizmoMaterial = new THREE.MeshBasicMaterial( {
+				depthTest: false,
+				depthWrite: false,
+				transparent: true,
+				side: THREE.DoubleSide,
+				fog: false,
+				toneMapped: false
+			} );
+			const gizmoLineMaterial = new THREE.LineBasicMaterial( {
+				depthTest: false,
+				depthWrite: false,
+				transparent: true,
+				linewidth: 1,
+				fog: false,
+				toneMapped: false
+			} ); // Make unique material for each axis/color
+
+			const matInvisible = gizmoMaterial.clone();
+			matInvisible.opacity = 0.15;
+			const matHelper = gizmoMaterial.clone();
+			matHelper.opacity = 0.33;
+			const matRed = gizmoMaterial.clone();
+			matRed.color.set( 0xff0000 );
+			const matGreen = gizmoMaterial.clone();
+			matGreen.color.set( 0x00ff00 );
+			const matBlue = gizmoMaterial.clone();
+			matBlue.color.set( 0x0000ff );
+			const matWhiteTransparent = gizmoMaterial.clone();
+			matWhiteTransparent.opacity = 0.25;
+			const matYellowTransparent = matWhiteTransparent.clone();
+			matYellowTransparent.color.set( 0xffff00 );
+			const matCyanTransparent = matWhiteTransparent.clone();
+			matCyanTransparent.color.set( 0x00ffff );
+			const matMagentaTransparent = matWhiteTransparent.clone();
+			matMagentaTransparent.color.set( 0xff00ff );
+			const matYellow = gizmoMaterial.clone();
+			matYellow.color.set( 0xffff00 );
+			const matLineRed = gizmoLineMaterial.clone();
+			matLineRed.color.set( 0xff0000 );
+			const matLineGreen = gizmoLineMaterial.clone();
+			matLineGreen.color.set( 0x00ff00 );
+			const matLineBlue = gizmoLineMaterial.clone();
+			matLineBlue.color.set( 0x0000ff );
+			const matLineCyan = gizmoLineMaterial.clone();
+			matLineCyan.color.set( 0x00ffff );
+			const matLineMagenta = gizmoLineMaterial.clone();
+			matLineMagenta.color.set( 0xff00ff );
+			const matLineYellow = gizmoLineMaterial.clone();
+			matLineYellow.color.set( 0xffff00 );
+			const matLineGray = gizmoLineMaterial.clone();
+			matLineGray.color.set( 0x787878 );
+			const matLineYellowTransparent = matLineYellow.clone();
+			matLineYellowTransparent.opacity = 0.25; // reusable geometry
+
+			const arrowGeometry = new THREE.CylinderGeometry( 0, 0.05, 0.2, 12, 1, false );
+			const scaleHandleGeometry = new THREE.BoxGeometry( 0.125, 0.125, 0.125 );
+			const lineGeometry = new THREE.BufferGeometry();
+			lineGeometry.setAttribute( 'position', new THREE.Float32BufferAttribute( [ 0, 0, 0, 1, 0, 0 ], 3 ) );
+
+			function CircleGeometry( radius, arc ) {
+
+				const geometry = new THREE.BufferGeometry();
+				const vertices = [];
+
+				for ( let i = 0; i <= 64 * arc; ++ i ) {
+
+					vertices.push( 0, Math.cos( i / 32 * Math.PI ) * radius, Math.sin( i / 32 * Math.PI ) * radius );
+
+				}
+
+				geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( vertices, 3 ) );
+				return geometry;
+
+			} // Special geometry for transform helper. If scaled with position vector it spans from [0,0,0] to position
+
+
+			function TranslateHelperGeometry() {
+
+				const geometry = new THREE.BufferGeometry();
+				geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( [ 0, 0, 0, 1, 1, 1 ], 3 ) );
+				return geometry;
+
+			} // Gizmo definitions - custom hierarchy definitions for setupGizmo() function
+
+
+			const gizmoTranslate = {
+				X: [[ new THREE.Mesh( arrowGeometry, matRed ), [ 1, 0, 0 ], [ 0, 0, - Math.PI / 2 ], null, 'fwd' ], [ new THREE.Mesh( arrowGeometry, matRed ), [ 1, 0, 0 ], [ 0, 0, Math.PI / 2 ], null, 'bwd' ], [ new THREE.Line( lineGeometry, matLineRed ) ]],
+				Y: [[ new THREE.Mesh( arrowGeometry, matGreen ), [ 0, 1, 0 ], null, null, 'fwd' ], [ new THREE.Mesh( arrowGeometry, matGreen ), [ 0, 1, 0 ], [ Math.PI, 0, 0 ], null, 'bwd' ], [ new THREE.Line( lineGeometry, matLineGreen ), null, [ 0, 0, Math.PI / 2 ]]],
+				Z: [[ new THREE.Mesh( arrowGeometry, matBlue ), [ 0, 0, 1 ], [ Math.PI / 2, 0, 0 ], null, 'fwd' ], [ new THREE.Mesh( arrowGeometry, matBlue ), [ 0, 0, 1 ], [ - Math.PI / 2, 0, 0 ], null, 'bwd' ], [ new THREE.Line( lineGeometry, matLineBlue ), null, [ 0, - Math.PI / 2, 0 ]]],
+				XYZ: [[ new THREE.Mesh( new THREE.OctahedronGeometry( 0.1, 0 ), matWhiteTransparent.clone() ), [ 0, 0, 0 ], [ 0, 0, 0 ]]],
+				XY: [[ new THREE.Mesh( new THREE.PlaneGeometry( 0.295, 0.295 ), matYellowTransparent.clone() ), [ 0.15, 0.15, 0 ]], [ new THREE.Line( lineGeometry, matLineYellow ), [ 0.18, 0.3, 0 ], null, [ 0.125, 1, 1 ]], [ new THREE.Line( lineGeometry, matLineYellow ), [ 0.3, 0.18, 0 ], [ 0, 0, Math.PI / 2 ], [ 0.125, 1, 1 ]]],
+				YZ: [[ new THREE.Mesh( new THREE.PlaneGeometry( 0.295, 0.295 ), matCyanTransparent.clone() ), [ 0, 0.15, 0.15 ], [ 0, Math.PI / 2, 0 ]], [ new THREE.Line( lineGeometry, matLineCyan ), [ 0, 0.18, 0.3 ], [ 0, 0, Math.PI / 2 ], [ 0.125, 1, 1 ]], [ new THREE.Line( lineGeometry, matLineCyan ), [ 0, 0.3, 0.18 ], [ 0, - Math.PI / 2, 0 ], [ 0.125, 1, 1 ]]],
+				XZ: [[ new THREE.Mesh( new THREE.PlaneGeometry( 0.295, 0.295 ), matMagentaTransparent.clone() ), [ 0.15, 0, 0.15 ], [ - Math.PI / 2, 0, 0 ]], [ new THREE.Line( lineGeometry, matLineMagenta ), [ 0.18, 0, 0.3 ], null, [ 0.125, 1, 1 ]], [ new THREE.Line( lineGeometry, matLineMagenta ), [ 0.3, 0, 0.18 ], [ 0, - Math.PI / 2, 0 ], [ 0.125, 1, 1 ]]]
+			};
+			const pickerTranslate = {
+				X: [[ new THREE.Mesh( new THREE.CylinderGeometry( 0.2, 0, 1, 4, 1, false ), matInvisible ), [ 0.6, 0, 0 ], [ 0, 0, - Math.PI / 2 ]]],
+				Y: [[ new THREE.Mesh( new THREE.CylinderGeometry( 0.2, 0, 1, 4, 1, false ), matInvisible ), [ 0, 0.6, 0 ]]],
+				Z: [[ new THREE.Mesh( new THREE.CylinderGeometry( 0.2, 0, 1, 4, 1, false ), matInvisible ), [ 0, 0, 0.6 ], [ Math.PI / 2, 0, 0 ]]],
+				XYZ: [[ new THREE.Mesh( new THREE.OctahedronGeometry( 0.2, 0 ), matInvisible ) ]],
+				XY: [[ new THREE.Mesh( new THREE.PlaneGeometry( 0.4, 0.4 ), matInvisible ), [ 0.2, 0.2, 0 ]]],
+				YZ: [[ new THREE.Mesh( new THREE.PlaneGeometry( 0.4, 0.4 ), matInvisible ), [ 0, 0.2, 0.2 ], [ 0, Math.PI / 2, 0 ]]],
+				XZ: [[ new THREE.Mesh( new THREE.PlaneGeometry( 0.4, 0.4 ), matInvisible ), [ 0.2, 0, 0.2 ], [ - Math.PI / 2, 0, 0 ]]]
+			};
+			const helperTranslate = {
+				START: [[ new THREE.Mesh( new THREE.OctahedronGeometry( 0.01, 2 ), matHelper ), null, null, null, 'helper' ]],
+				END: [[ new THREE.Mesh( new THREE.OctahedronGeometry( 0.01, 2 ), matHelper ), null, null, null, 'helper' ]],
+				DELTA: [[ new THREE.Line( TranslateHelperGeometry(), matHelper ), null, null, null, 'helper' ]],
+				X: [[ new THREE.Line( lineGeometry, matHelper.clone() ), [ - 1e3, 0, 0 ], null, [ 1e6, 1, 1 ], 'helper' ]],
+				Y: [[ new THREE.Line( lineGeometry, matHelper.clone() ), [ 0, - 1e3, 0 ], [ 0, 0, Math.PI / 2 ], [ 1e6, 1, 1 ], 'helper' ]],
+				Z: [[ new THREE.Line( lineGeometry, matHelper.clone() ), [ 0, 0, - 1e3 ], [ 0, - Math.PI / 2, 0 ], [ 1e6, 1, 1 ], 'helper' ]]
+			};
+			const gizmoRotate = {
+				X: [[ new THREE.Line( CircleGeometry( 1, 0.5 ), matLineRed ) ], [ new THREE.Mesh( new THREE.OctahedronGeometry( 0.04, 0 ), matRed ), [ 0, 0, 0.99 ], null, [ 1, 3, 1 ]]],
+				Y: [[ new THREE.Line( CircleGeometry( 1, 0.5 ), matLineGreen ), null, [ 0, 0, - Math.PI / 2 ]], [ new THREE.Mesh( new THREE.OctahedronGeometry( 0.04, 0 ), matGreen ), [ 0, 0, 0.99 ], null, [ 3, 1, 1 ]]],
+				Z: [[ new THREE.Line( CircleGeometry( 1, 0.5 ), matLineBlue ), null, [ 0, Math.PI / 2, 0 ]], [ new THREE.Mesh( new THREE.OctahedronGeometry( 0.04, 0 ), matBlue ), [ 0.99, 0, 0 ], null, [ 1, 3, 1 ]]],
+				E: [[ new THREE.Line( CircleGeometry( 1.25, 1 ), matLineYellowTransparent ), null, [ 0, Math.PI / 2, 0 ]], [ new THREE.Mesh( new THREE.CylinderGeometry( 0.03, 0, 0.15, 4, 1, false ), matLineYellowTransparent ), [ 1.17, 0, 0 ], [ 0, 0, - Math.PI / 2 ], [ 1, 1, 0.001 ]], [ new THREE.Mesh( new THREE.CylinderGeometry( 0.03, 0, 0.15, 4, 1, false ), matLineYellowTransparent ), [ - 1.17, 0, 0 ], [ 0, 0, Math.PI / 2 ], [ 1, 1, 0.001 ]], [ new THREE.Mesh( new THREE.CylinderGeometry( 0.03, 0, 0.15, 4, 1, false ), matLineYellowTransparent ), [ 0, - 1.17, 0 ], [ Math.PI, 0, 0 ], [ 1, 1, 0.001 ]], [ new THREE.Mesh( new THREE.CylinderGeometry( 0.03, 0, 0.15, 4, 1, false ), matLineYellowTransparent ), [ 0, 1.17, 0 ], [ 0, 0, 0 ], [ 1, 1, 0.001 ]]],
+				XYZE: [[ new THREE.Line( CircleGeometry( 1, 1 ), matLineGray ), null, [ 0, Math.PI / 2, 0 ]]]
+			};
+			const helperRotate = {
+				AXIS: [[ new THREE.Line( lineGeometry, matHelper.clone() ), [ - 1e3, 0, 0 ], null, [ 1e6, 1, 1 ], 'helper' ]]
+			};
+			const pickerRotate = {
+				X: [[ new THREE.Mesh( new THREE.TorusGeometry( 1, 0.1, 4, 24 ), matInvisible ), [ 0, 0, 0 ], [ 0, - Math.PI / 2, - Math.PI / 2 ]]],
+				Y: [[ new THREE.Mesh( new THREE.TorusGeometry( 1, 0.1, 4, 24 ), matInvisible ), [ 0, 0, 0 ], [ Math.PI / 2, 0, 0 ]]],
+				Z: [[ new THREE.Mesh( new THREE.TorusGeometry( 1, 0.1, 4, 24 ), matInvisible ), [ 0, 0, 0 ], [ 0, 0, - Math.PI / 2 ]]],
+				E: [[ new THREE.Mesh( new THREE.TorusGeometry( 1.25, 0.1, 2, 24 ), matInvisible ) ]],
+				XYZE: [[ new THREE.Mesh( new THREE.SphereGeometry( 0.7, 10, 8 ), matInvisible ) ]]
+			};
+			const gizmoScale = {
+				X: [[ new THREE.Mesh( scaleHandleGeometry, matRed ), [ 0.8, 0, 0 ], [ 0, 0, - Math.PI / 2 ]], [ new THREE.Line( lineGeometry, matLineRed ), null, null, [ 0.8, 1, 1 ]]],
+				Y: [[ new THREE.Mesh( scaleHandleGeometry, matGreen ), [ 0, 0.8, 0 ]], [ new THREE.Line( lineGeometry, matLineGreen ), null, [ 0, 0, Math.PI / 2 ], [ 0.8, 1, 1 ]]],
+				Z: [[ new THREE.Mesh( scaleHandleGeometry, matBlue ), [ 0, 0, 0.8 ], [ Math.PI / 2, 0, 0 ]], [ new THREE.Line( lineGeometry, matLineBlue ), null, [ 0, - Math.PI / 2, 0 ], [ 0.8, 1, 1 ]]],
+				XY: [[ new THREE.Mesh( scaleHandleGeometry, matYellowTransparent ), [ 0.85, 0.85, 0 ], null, [ 2, 2, 0.2 ]], [ new THREE.Line( lineGeometry, matLineYellow ), [ 0.855, 0.98, 0 ], null, [ 0.125, 1, 1 ]], [ new THREE.Line( lineGeometry, matLineYellow ), [ 0.98, 0.855, 0 ], [ 0, 0, Math.PI / 2 ], [ 0.125, 1, 1 ]]],
+				YZ: [[ new THREE.Mesh( scaleHandleGeometry, matCyanTransparent ), [ 0, 0.85, 0.85 ], null, [ 0.2, 2, 2 ]], [ new THREE.Line( lineGeometry, matLineCyan ), [ 0, 0.855, 0.98 ], [ 0, 0, Math.PI / 2 ], [ 0.125, 1, 1 ]], [ new THREE.Line( lineGeometry, matLineCyan ), [ 0, 0.98, 0.855 ], [ 0, - Math.PI / 2, 0 ], [ 0.125, 1, 1 ]]],
+				XZ: [[ new THREE.Mesh( scaleHandleGeometry, matMagentaTransparent ), [ 0.85, 0, 0.85 ], null, [ 2, 0.2, 2 ]], [ new THREE.Line( lineGeometry, matLineMagenta ), [ 0.855, 0, 0.98 ], null, [ 0.125, 1, 1 ]], [ new THREE.Line( lineGeometry, matLineMagenta ), [ 0.98, 0, 0.855 ], [ 0, - Math.PI / 2, 0 ], [ 0.125, 1, 1 ]]],
+				XYZX: [[ new THREE.Mesh( new THREE.BoxGeometry( 0.125, 0.125, 0.125 ), matWhiteTransparent.clone() ), [ 1.1, 0, 0 ]]],
+				XYZY: [[ new THREE.Mesh( new THREE.BoxGeometry( 0.125, 0.125, 0.125 ), matWhiteTransparent.clone() ), [ 0, 1.1, 0 ]]],
+				XYZZ: [[ new THREE.Mesh( new THREE.BoxGeometry( 0.125, 0.125, 0.125 ), matWhiteTransparent.clone() ), [ 0, 0, 1.1 ]]]
+			};
+			const pickerScale = {
+				X: [[ new THREE.Mesh( new THREE.CylinderGeometry( 0.2, 0, 0.8, 4, 1, false ), matInvisible ), [ 0.5, 0, 0 ], [ 0, 0, - Math.PI / 2 ]]],
+				Y: [[ new THREE.Mesh( new THREE.CylinderGeometry( 0.2, 0, 0.8, 4, 1, false ), matInvisible ), [ 0, 0.5, 0 ]]],
+				Z: [[ new THREE.Mesh( new THREE.CylinderGeometry( 0.2, 0, 0.8, 4, 1, false ), matInvisible ), [ 0, 0, 0.5 ], [ Math.PI / 2, 0, 0 ]]],
+				XY: [[ new THREE.Mesh( scaleHandleGeometry, matInvisible ), [ 0.85, 0.85, 0 ], null, [ 3, 3, 0.2 ]]],
+				YZ: [[ new THREE.Mesh( scaleHandleGeometry, matInvisible ), [ 0, 0.85, 0.85 ], null, [ 0.2, 3, 3 ]]],
+				XZ: [[ new THREE.Mesh( scaleHandleGeometry, matInvisible ), [ 0.85, 0, 0.85 ], null, [ 3, 0.2, 3 ]]],
+				XYZX: [[ new THREE.Mesh( new THREE.BoxGeometry( 0.2, 0.2, 0.2 ), matInvisible ), [ 1.1, 0, 0 ]]],
+				XYZY: [[ new THREE.Mesh( new THREE.BoxGeometry( 0.2, 0.2, 0.2 ), matInvisible ), [ 0, 1.1, 0 ]]],
+				XYZZ: [[ new THREE.Mesh( new THREE.BoxGeometry( 0.2, 0.2, 0.2 ), matInvisible ), [ 0, 0, 1.1 ]]]
+			};
+			const helperScale = {
+				X: [[ new THREE.Line( lineGeometry, matHelper.clone() ), [ - 1e3, 0, 0 ], null, [ 1e6, 1, 1 ], 'helper' ]],
+				Y: [[ new THREE.Line( lineGeometry, matHelper.clone() ), [ 0, - 1e3, 0 ], [ 0, 0, Math.PI / 2 ], [ 1e6, 1, 1 ], 'helper' ]],
+				Z: [[ new THREE.Line( lineGeometry, matHelper.clone() ), [ 0, 0, - 1e3 ], [ 0, - Math.PI / 2, 0 ], [ 1e6, 1, 1 ], 'helper' ]]
+			}; // Creates an THREE.Object3D with gizmos described in custom hierarchy definition.
+
+			function setupGizmo( gizmoMap ) {
+
+				const gizmo = new THREE.Object3D();
+
+				for ( const name in gizmoMap ) {
+
+					for ( let i = gizmoMap[ name ].length; i --; ) {
+
+						const object = gizmoMap[ name ][ i ][ 0 ].clone();
+						const position = gizmoMap[ name ][ i ][ 1 ];
+						const rotation = gizmoMap[ name ][ i ][ 2 ];
+						const scale = gizmoMap[ name ][ i ][ 3 ];
+						const tag = gizmoMap[ name ][ i ][ 4 ]; // name and tag properties are essential for picking and updating logic.
+
+						object.name = name;
+						object.tag = tag;
+
+						if ( position ) {
+
+							object.position.set( position[ 0 ], position[ 1 ], position[ 2 ] );
+
+						}
+
+						if ( rotation ) {
+
+							object.rotation.set( rotation[ 0 ], rotation[ 1 ], rotation[ 2 ] );
+
+						}
+
+						if ( scale ) {
+
+							object.scale.set( scale[ 0 ], scale[ 1 ], scale[ 2 ] );
+
+						}
+
+						object.updateMatrix();
+						const tempGeometry = object.geometry.clone();
+						tempGeometry.applyMatrix4( object.matrix );
+						object.geometry = tempGeometry;
+						object.renderOrder = Infinity;
+						object.position.set( 0, 0, 0 );
+						object.rotation.set( 0, 0, 0 );
+						object.scale.set( 1, 1, 1 );
+						gizmo.add( object );
+
+					}
+
+				}
+
+				return gizmo;
+
+			} // Gizmo creation
+
+
+			this.gizmo = {};
+			this.picker = {};
+			this.helper = {};
+			this.add( this.gizmo[ 'translate' ] = setupGizmo( gizmoTranslate ) );
+			this.add( this.gizmo[ 'rotate' ] = setupGizmo( gizmoRotate ) );
+			this.add( this.gizmo[ 'scale' ] = setupGizmo( gizmoScale ) );
+			this.add( this.picker[ 'translate' ] = setupGizmo( pickerTranslate ) );
+			this.add( this.picker[ 'rotate' ] = setupGizmo( pickerRotate ) );
+			this.add( this.picker[ 'scale' ] = setupGizmo( pickerScale ) );
+			this.add( this.helper[ 'translate' ] = setupGizmo( helperTranslate ) );
+			this.add( this.helper[ 'rotate' ] = setupGizmo( helperRotate ) );
+			this.add( this.helper[ 'scale' ] = setupGizmo( helperScale ) ); // Pickers should be hidden always
+
+			this.picker[ 'translate' ].visible = false;
+			this.picker[ 'rotate' ].visible = false;
+			this.picker[ 'scale' ].visible = false;
+
+		} // updateMatrixWorld will update transformations and appearance of individual handles
+
+
+		updateMatrixWorld( force ) {
+
+			const space = this.mode === 'scale' ? this.space : 'local'; // scale always oriented to local rotation
+
+			const quaternion = space === 'local' ? this.worldQuaternion : _identityQuaternion; // Show only gizmos for current transform mode
+
+			this.gizmo[ 'translate' ].visible = this.mode === 'translate';
+			this.gizmo[ 'rotate' ].visible = this.mode === 'rotate';
+			this.gizmo[ 'scale' ].visible = this.mode === 'scale';
+			this.helper[ 'translate' ].visible = this.mode === 'translate';
+			this.helper[ 'rotate' ].visible = this.mode === 'rotate';
+			this.helper[ 'scale' ].visible = this.mode === 'scale';
+			let handles = [];
+			handles = handles.concat( this.picker[ this.mode ].children );
+			handles = handles.concat( this.gizmo[ this.mode ].children );
+			handles = handles.concat( this.helper[ this.mode ].children );
+
+			for ( let i = 0; i < handles.length; i ++ ) {
+
+				const handle = handles[ i ]; // hide aligned to camera
+
+				handle.visible = true;
+				handle.rotation.set( 0, 0, 0 );
+				handle.position.copy( this.worldPosition );
+				let factor;
+
+				if ( this.camera.isOrthographicCamera ) {
+
+					factor = ( this.camera.top - this.camera.bottom ) / this.camera.zoom;
+
+				} else {
+
+					factor = this.worldPosition.distanceTo( this.cameraPosition ) * Math.min( 1.9 * Math.tan( Math.PI * this.camera.fov / 360 ) / this.camera.zoom, 7 );
+
+				}
+
+				handle.scale.set( 1, 1, 1 ).multiplyScalar( factor * this.size / 7 ); // TODO: simplify helpers and consider decoupling from gizmo
+
+				if ( handle.tag === 'helper' ) {
+
+					handle.visible = false;
+
+					if ( handle.name === 'AXIS' ) {
+
+						handle.position.copy( this.worldPositionStart );
+						handle.visible = !! this.axis;
+
+						if ( this.axis === 'X' ) {
+
+							_tempQuaternion.setFromEuler( _tempEuler.set( 0, 0, 0 ) );
+
+							handle.quaternion.copy( quaternion ).multiply( _tempQuaternion );
+
+							if ( Math.abs( _alignVector.copy( _unitX ).applyQuaternion( quaternion ).dot( this.eye ) ) > 0.9 ) {
+
+								handle.visible = false;
+
+							}
+
+						}
+
+						if ( this.axis === 'Y' ) {
+
+							_tempQuaternion.setFromEuler( _tempEuler.set( 0, 0, Math.PI / 2 ) );
+
+							handle.quaternion.copy( quaternion ).multiply( _tempQuaternion );
+
+							if ( Math.abs( _alignVector.copy( _unitY ).applyQuaternion( quaternion ).dot( this.eye ) ) > 0.9 ) {
+
+								handle.visible = false;
+
+							}
+
+						}
+
+						if ( this.axis === 'Z' ) {
+
+							_tempQuaternion.setFromEuler( _tempEuler.set( 0, Math.PI / 2, 0 ) );
+
+							handle.quaternion.copy( quaternion ).multiply( _tempQuaternion );
+
+							if ( Math.abs( _alignVector.copy( _unitZ ).applyQuaternion( quaternion ).dot( this.eye ) ) > 0.9 ) {
+
+								handle.visible = false;
+
+							}
+
+						}
+
+						if ( this.axis === 'XYZE' ) {
+
+							_tempQuaternion.setFromEuler( _tempEuler.set( 0, Math.PI / 2, 0 ) );
+
+							_alignVector.copy( this.rotationAxis );
+
+							handle.quaternion.setFromRotationMatrix( _lookAtMatrix.lookAt( _zeroVector, _alignVector, _unitY ) );
+							handle.quaternion.multiply( _tempQuaternion );
+							handle.visible = this.dragging;
+
+						}
+
+						if ( this.axis === 'E' ) {
+
+							handle.visible = false;
+
+						}
+
+					} else if ( handle.name === 'START' ) {
+
+						handle.position.copy( this.worldPositionStart );
+						handle.visible = this.dragging;
+
+					} else if ( handle.name === 'END' ) {
+
+						handle.position.copy( this.worldPosition );
+						handle.visible = this.dragging;
+
+					} else if ( handle.name === 'DELTA' ) {
+
+						handle.position.copy( this.worldPositionStart );
+						handle.quaternion.copy( this.worldQuaternionStart );
+
+						_tempVector.set( 1e-10, 1e-10, 1e-10 ).add( this.worldPositionStart ).sub( this.worldPosition ).multiplyScalar( - 1 );
+
+						_tempVector.applyQuaternion( this.worldQuaternionStart.clone().invert() );
+
+						handle.scale.copy( _tempVector );
+						handle.visible = this.dragging;
+
+					} else {
+
+						handle.quaternion.copy( quaternion );
+
+						if ( this.dragging ) {
+
+							handle.position.copy( this.worldPositionStart );
+
+						} else {
+
+							handle.position.copy( this.worldPosition );
+
+						}
+
+						if ( this.axis ) {
+
+							handle.visible = this.axis.search( handle.name ) !== - 1;
+
+						}
+
+					} // If updating helper, skip rest of the loop
+
+
+					continue;
+
+				} // Align handles to current local or world rotation
+
+
+				handle.quaternion.copy( quaternion );
+
+				if ( this.mode === 'translate' || this.mode === 'scale' ) {
+
+					// Hide translate and scale axis facing the camera
+					const AXIS_HIDE_TRESHOLD = 0.99;
+					const PLANE_HIDE_TRESHOLD = 0.2;
+					const AXIS_FLIP_TRESHOLD = 0.0;
+
+					if ( handle.name === 'X' || handle.name === 'XYZX' ) {
+
+						if ( Math.abs( _alignVector.copy( _unitX ).applyQuaternion( quaternion ).dot( this.eye ) ) > AXIS_HIDE_TRESHOLD ) {
+
+							handle.scale.set( 1e-10, 1e-10, 1e-10 );
+							handle.visible = false;
+
+						}
+
+					}
+
+					if ( handle.name === 'Y' || handle.name === 'XYZY' ) {
+
+						if ( Math.abs( _alignVector.copy( _unitY ).applyQuaternion( quaternion ).dot( this.eye ) ) > AXIS_HIDE_TRESHOLD ) {
+
+							handle.scale.set( 1e-10, 1e-10, 1e-10 );
+							handle.visible = false;
+
+						}
+
+					}
+
+					if ( handle.name === 'Z' || handle.name === 'XYZZ' ) {
+
+						if ( Math.abs( _alignVector.copy( _unitZ ).applyQuaternion( quaternion ).dot( this.eye ) ) > AXIS_HIDE_TRESHOLD ) {
+
+							handle.scale.set( 1e-10, 1e-10, 1e-10 );
+							handle.visible = false;
+
+						}
+
+					}
+
+					if ( handle.name === 'XY' ) {
+
+						if ( Math.abs( _alignVector.copy( _unitZ ).applyQuaternion( quaternion ).dot( this.eye ) ) < PLANE_HIDE_TRESHOLD ) {
+
+							handle.scale.set( 1e-10, 1e-10, 1e-10 );
+							handle.visible = false;
+
+						}
+
+					}
+
+					if ( handle.name === 'YZ' ) {
+
+						if ( Math.abs( _alignVector.copy( _unitX ).applyQuaternion( quaternion ).dot( this.eye ) ) < PLANE_HIDE_TRESHOLD ) {
+
+							handle.scale.set( 1e-10, 1e-10, 1e-10 );
+							handle.visible = false;
+
+						}
+
+					}
+
+					if ( handle.name === 'XZ' ) {
+
+						if ( Math.abs( _alignVector.copy( _unitY ).applyQuaternion( quaternion ).dot( this.eye ) ) < PLANE_HIDE_TRESHOLD ) {
+
+							handle.scale.set( 1e-10, 1e-10, 1e-10 );
+							handle.visible = false;
+
+						}
+
+					} // Flip translate and scale axis ocluded behind another axis
+
+
+					if ( handle.name.search( 'X' ) !== - 1 ) {
+
+						if ( _alignVector.copy( _unitX ).applyQuaternion( quaternion ).dot( this.eye ) < AXIS_FLIP_TRESHOLD ) {
+
+							if ( handle.tag === 'fwd' ) {
+
+								handle.visible = false;
+
+							} else {
+
+								handle.scale.x *= - 1;
+
+							}
+
+						} else if ( handle.tag === 'bwd' ) {
+
+							handle.visible = false;
+
+						}
+
+					}
+
+					if ( handle.name.search( 'Y' ) !== - 1 ) {
+
+						if ( _alignVector.copy( _unitY ).applyQuaternion( quaternion ).dot( this.eye ) < AXIS_FLIP_TRESHOLD ) {
+
+							if ( handle.tag === 'fwd' ) {
+
+								handle.visible = false;
+
+							} else {
+
+								handle.scale.y *= - 1;
+
+							}
+
+						} else if ( handle.tag === 'bwd' ) {
+
+							handle.visible = false;
+
+						}
+
+					}
+
+					if ( handle.name.search( 'Z' ) !== - 1 ) {
+
+						if ( _alignVector.copy( _unitZ ).applyQuaternion( quaternion ).dot( this.eye ) < AXIS_FLIP_TRESHOLD ) {
+
+							if ( handle.tag === 'fwd' ) {
+
+								handle.visible = false;
+
+							} else {
+
+								handle.scale.z *= - 1;
+
+							}
+
+						} else if ( handle.tag === 'bwd' ) {
+
+							handle.visible = false;
+
+						}
+
+					}
+
+				} else if ( this.mode === 'rotate' ) {
+
+					// Align handles to current local or world rotation
+					_tempQuaternion2.copy( quaternion );
+
+					_alignVector.copy( this.eye ).applyQuaternion( _tempQuaternion.copy( quaternion ).invert() );
+
+					if ( handle.name.search( 'E' ) !== - 1 ) {
+
+						handle.quaternion.setFromRotationMatrix( _lookAtMatrix.lookAt( this.eye, _zeroVector, _unitY ) );
+
+					}
+
+					if ( handle.name === 'X' ) {
+
+						_tempQuaternion.setFromAxisAngle( _unitX, Math.atan2( - _alignVector.y, _alignVector.z ) );
+
+						_tempQuaternion.multiplyQuaternions( _tempQuaternion2, _tempQuaternion );
+
+						handle.quaternion.copy( _tempQuaternion );
+
+					}
+
+					if ( handle.name === 'Y' ) {
+
+						_tempQuaternion.setFromAxisAngle( _unitY, Math.atan2( _alignVector.x, _alignVector.z ) );
+
+						_tempQuaternion.multiplyQuaternions( _tempQuaternion2, _tempQuaternion );
+
+						handle.quaternion.copy( _tempQuaternion );
+
+					}
+
+					if ( handle.name === 'Z' ) {
+
+						_tempQuaternion.setFromAxisAngle( _unitZ, Math.atan2( _alignVector.y, _alignVector.x ) );
+
+						_tempQuaternion.multiplyQuaternions( _tempQuaternion2, _tempQuaternion );
+
+						handle.quaternion.copy( _tempQuaternion );
+
+					}
+
+				} // Hide disabled axes
+
+
+				handle.visible = handle.visible && ( handle.name.indexOf( 'X' ) === - 1 || this.showX );
+				handle.visible = handle.visible && ( handle.name.indexOf( 'Y' ) === - 1 || this.showY );
+				handle.visible = handle.visible && ( handle.name.indexOf( 'Z' ) === - 1 || this.showZ );
+				handle.visible = handle.visible && ( handle.name.indexOf( 'E' ) === - 1 || this.showX && this.showY && this.showZ ); // highlight selected axis
+
+				handle.material._opacity = handle.material._opacity || handle.material.opacity;
+				handle.material._color = handle.material._color || handle.material.color.clone();
+				handle.material.color.copy( handle.material._color );
+				handle.material.opacity = handle.material._opacity;
+
+				if ( ! this.enabled ) {
+
+					handle.material.opacity *= 0.5;
+					handle.material.color.lerp( new THREE.Color( 1, 1, 1 ), 0.5 );
+
+				} else if ( this.axis ) {
+
+					if ( handle.name === this.axis ) {
+
+						handle.material.opacity = 1.0;
+						handle.material.color.lerp( new THREE.Color( 1, 1, 1 ), 0.5 );
+
+					} else if ( this.axis.split( '' ).some( function ( a ) {
+
+						return handle.name === a;
+
+					} ) ) {
+
+						handle.material.opacity = 1.0;
+						handle.material.color.lerp( new THREE.Color( 1, 1, 1 ), 0.5 );
+
+					} else {
+
+						handle.material.opacity *= 0.25;
+						handle.material.color.lerp( new THREE.Color( 1, 1, 1 ), 0.5 );
+
+					}
+
+				}
+
+			}
+
+			super.updateMatrixWorld( force );
+
+		}
+
+	}
+
+	TransformControlsGizmo.prototype.isTransformControlsGizmo = true; //
+
+	class TransformControlsPlane extends THREE.Mesh {
+
+		constructor() {
+
+			super( new THREE.PlaneGeometry( 100000, 100000, 2, 2 ), new THREE.MeshBasicMaterial( {
+				visible: false,
+				wireframe: true,
+				side: THREE.DoubleSide,
+				transparent: true,
+				opacity: 0.1,
+				toneMapped: false
+			} ) );
+			this.type = 'TransformControlsPlane';
+
+		}
+
+		updateMatrixWorld( force ) {
+
+			let space = this.space;
+			this.position.copy( this.worldPosition );
+			if ( this.mode === 'scale' ) space = 'local'; // scale always oriented to local rotation
+
+			_v1.copy( _unitX ).applyQuaternion( space === 'local' ? this.worldQuaternion : _identityQuaternion );
+
+			_v2.copy( _unitY ).applyQuaternion( space === 'local' ? this.worldQuaternion : _identityQuaternion );
+
+			_v3.copy( _unitZ ).applyQuaternion( space === 'local' ? this.worldQuaternion : _identityQuaternion ); // Align the plane for current transform mode, axis and space.
+
+
+			_alignVector.copy( _v2 );
+
+			switch ( this.mode ) {
+
+				case 'translate':
+				case 'scale':
+					switch ( this.axis ) {
+
+						case 'X':
+							_alignVector.copy( this.eye ).cross( _v1 );
+
+							_dirVector.copy( _v1 ).cross( _alignVector );
+
+							break;
+
+						case 'Y':
+							_alignVector.copy( this.eye ).cross( _v2 );
+
+							_dirVector.copy( _v2 ).cross( _alignVector );
+
+							break;
+
+						case 'Z':
+							_alignVector.copy( this.eye ).cross( _v3 );
+
+							_dirVector.copy( _v3 ).cross( _alignVector );
+
+							break;
+
+						case 'XY':
+							_dirVector.copy( _v3 );
+
+							break;
+
+						case 'YZ':
+							_dirVector.copy( _v1 );
+
+							break;
+
+						case 'XZ':
+							_alignVector.copy( _v3 );
+
+							_dirVector.copy( _v2 );
+
+							break;
+
+						case 'XYZ':
+						case 'E':
+							_dirVector.set( 0, 0, 0 );
+
+							break;
+
+					}
+
+					break;
+
+				case 'rotate':
+				default:
+					// special case for rotate
+					_dirVector.set( 0, 0, 0 );
+
+			}
+
+			if ( _dirVector.length() === 0 ) {
+
+				// If in rotate mode, make the plane parallel to camera
+				this.quaternion.copy( this.cameraQuaternion );
+
+			} else {
+
+				_tempMatrix.lookAt( _tempVector.set( 0, 0, 0 ), _dirVector, _alignVector );
+
+				this.quaternion.setFromRotationMatrix( _tempMatrix );
+
+			}
+
+			super.updateMatrixWorld( force );
+
+		}
+
+	}
+
+	TransformControlsPlane.prototype.isTransformControlsPlane = true;
+
+	THREE.TransformControls = TransformControls;
+	THREE.TransformControlsGizmo = TransformControlsGizmo;
+	THREE.TransformControlsPlane = TransformControlsPlane;
+
+} )();
+
+</script>
+<style>
+  :root{
+    --bg:#0a0e1a; --bg2:#0e1426; --panel:#101830; --panel2:#16203c; --line:#243156;
+    --gold:#d4af37; --gold-soft:#e2c45f; --gold-dim:#9c8536;
+    --ink:#e9edf6; --muted:#9aa6c2; --muted2:#6f7da0;
+    --mountain:#e0653f; --valley:#5b8ff0; --ok:#69c08a;
+    --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+    --sans:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px;overflow:hidden;-webkit-font-smoothing:antialiased}
+  button{font-family:var(--sans);cursor:pointer}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#222c47;border-radius:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  #top{height:50px;display:flex;align-items:center;gap:16px;padding:0 18px;background:linear-gradient(180deg,#0d1426,#0a0f1d);border-bottom:1px solid var(--line);z-index:30}
+  #brand{font-family:var(--mono);letter-spacing:.42em;color:var(--gold);font-weight:700;font-size:16px;line-height:1}
+  #brand small{display:block;letter-spacing:.1em;color:var(--muted2);font-size:8px;font-weight:400;margin-top:2px}
+  #tabs{flex:1;min-width:0;background:#0a1020;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px 30px 8px 12px;font-size:13px;font-family:var(--mono);-webkit-appearance:none;appearance:none;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--gold-soft) 50%),linear-gradient(135deg,var(--gold-soft) 50%,transparent 50%);background-position:calc(100% - 16px) center,calc(100% - 11px) center;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+  #tabs:hover,#tabs:focus{outline:none;border-color:var(--gold-dim)}
+  #tabs option{background:#0e1424;color:var(--ink)}
+  .topbtn{background:var(--panel);border:1px solid var(--line);color:var(--ink);padding:7px 13px;border-radius:7px;font-size:12px}
+  .topbtn:hover{border-color:var(--gold-dim);color:var(--gold-soft)}
+  .topbtn.gold{background:linear-gradient(180deg,#2a2410,#1c180a);border-color:var(--gold-dim);color:var(--gold-soft)}
+  #app{display:grid;grid-template-columns:236px 1fr 312px;height:calc(100% - 50px)}
+  .pane{overflow-y:auto;background:var(--bg2)}
+  #left{border-right:1px solid var(--line);padding:14px 14px 60px}
+  #right{border-left:1px solid var(--line);padding:14px 14px 60px}
+  #center{position:relative;background:radial-gradient(900px 520px at 50% 28%,#101a33 0%,#080c16 70%)}
+  #cv{width:100%;height:100%;display:block}
+  .sct{margin-bottom:18px}
+  .sct h3{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted2);margin:0 0 9px;font-weight:700;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .ptitle{color:var(--gold-soft);font-size:14px;font-weight:600;margin:0 0 3px}
+  .pdesc{color:var(--muted);font-size:11.5px;line-height:1.5;margin:0}
+  .pmeta{display:flex;flex-wrap:wrap;gap:5px;margin:9px 0 0}
+  .pmeta span{font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:12px;border:1px solid var(--line);color:var(--muted)}
+  .pmeta span.dev{color:var(--ok);border-color:#244a36}
+  .pmeta span.nd{color:var(--mountain);border-color:#4a2a24}
+  .ctrl{margin:11px 0}
+  .ctrl label{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-bottom:6px}
+  .ctrl label b{color:var(--gold-soft);font-family:var(--mono);font-weight:500}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:3px;background:#1c2742;outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--gold);border:2px solid #0a0e1a;cursor:pointer;box-shadow:0 0 0 1px var(--gold-dim)}
+  input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--gold);border:2px solid #0a0e1a;cursor:pointer}
+  .toggle{display:flex;align-items:center;justify-content:space-between;padding:7px 0;font-size:12px;color:var(--muted)}
+  .sw{position:relative;width:36px;height:20px;border-radius:11px;background:#1c2742;border:1px solid var(--line);transition:.15s;cursor:pointer;flex:none}
+  .sw.on{background:#2a3a16;border-color:var(--gold-dim)}
+  .sw i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--muted);transition:.15s}
+  .sw.on i{left:18px;background:var(--gold-soft)}
+  #foldbar{position:absolute;left:50%;transform:translateX(-50%);bottom:18px;width:min(560px,82%);background:rgba(12,18,36,.86);border:1px solid var(--line);border-radius:12px;padding:11px 16px;display:flex;align-items:center;gap:14px;z-index:10}
+  #foldbar .flabel{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--muted2);white-space:nowrap}
+  #foldbar input{flex:1}
+  #playbtn{width:34px;height:34px;border-radius:9px;background:var(--panel2);border:1px solid var(--line);color:var(--gold-soft);font-size:13px;flex:none}
+  #playbtn:hover{border-color:var(--gold-dim)}
+  #legend{position:absolute;left:16px;top:14px;background:rgba(12,18,36,.78);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:10.5px;z-index:10;color:var(--muted)}
+  #legend div{display:flex;align-items:center;gap:8px;margin:3px 0}
+  #legend i{width:20px;height:0;border-top-width:2.5px;border-top-style:solid;display:inline-block}
+  .lm{border-color:var(--mountain)} .lv{border-color:var(--valley);border-top-style:dashed!important} .lb{border-color:var(--muted2)}
+  #hud{position:absolute;right:16px;top:14px;background:rgba(12,18,36,.78);border:1px solid var(--line);border-radius:9px;padding:10px 13px;font-family:var(--mono);font-size:10.5px;z-index:10;color:var(--muted);min-width:158px}
+  #hud b{color:var(--gold-soft)} #hud div{display:flex;justify-content:space-between;margin:2px 0}
+  #svgwrap{background:#080d18;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  #svgwrap svg{display:block;width:100%;height:232px;background:#080d18}
+  .previewcap{font-size:10px;color:var(--muted2);font-family:var(--mono);letter-spacing:.08em;margin:0 0 6px}
+  .exrow{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+  .exbtn{background:var(--panel);border:1px solid var(--line);color:var(--ink);padding:9px 8px;border-radius:8px;font-size:11.5px;font-family:var(--mono);text-align:center}
+  .exbtn:hover{border-color:var(--gold-dim);color:var(--gold-soft);background:var(--panel2)}
+  .exbtn small{display:block;color:var(--muted2);font-size:8.5px;margin-top:2px}
+  .note{font-size:10.5px;color:var(--muted2);line-height:1.55;margin-top:9px}
+  .credit{font-family:var(--mono);font-size:9.5px;color:var(--muted2);margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
+  #exmenu{position:absolute;display:none;background:#0e1530;border:1px solid var(--line);border-radius:9px;padding:6px;z-index:60;box-shadow:0 18px 40px -18px #000;min-width:182px;right:0;top:42px}
+  #exmenu button{display:block;width:100%;text-align:left;background:transparent;border:none;color:var(--ink);padding:8px 11px;border-radius:6px;font-size:11.5px;font-family:var(--mono)}
+  #exmenu button:hover{background:var(--panel2);color:var(--gold-soft)}
+  #exmenu hr{border:none;border-top:1px solid var(--line);margin:4px 6px}
+  #exmenu .gh{font-size:9px;color:var(--muted2);letter-spacing:.14em;padding:6px 11px 2px;text-transform:uppercase}
+  /* science button + modal */
+  .scibtn{background:linear-gradient(180deg,#2a2410,#1c180a);border:1px solid var(--gold-dim);color:var(--gold-soft);padding:5px 10px;border-radius:7px;font-size:11px;font-family:var(--mono);white-space:nowrap}
+  .scibtn:hover{background:#332a12}
+  #sciModal{position:fixed;inset:0;background:rgba(6,9,18,.8);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:200}
+  #sciCard{width:min(720px,92vw);max-height:86vh;overflow-y:auto;background:linear-gradient(180deg,#101830,#0b1120);border:1px solid var(--gold-dim);border-radius:16px;padding:28px 32px 30px;box-shadow:0 30px 80px -20px #000;position:relative}
+  #sciClose{position:absolute;top:14px;right:16px;background:var(--panel2);border:1px solid var(--line);color:var(--muted);width:30px;height:30px;border-radius:8px;font-size:16px;line-height:1}
+  #sciClose:hover{color:var(--gold-soft);border-color:var(--gold-dim)}
+  #sciBody h2{color:var(--gold-soft);font-size:21px;margin:0 0 12px;letter-spacing:.01em}
+  .sgloss{color:var(--ink);font-size:14px;line-height:1.62;margin:0 0 14px}
+  .sdims{background:#0c1430;border:1px solid var(--line);border-radius:9px;padding:11px 14px;color:var(--muted);font-size:12.5px;margin:0 0 16px;line-height:1.55}
+  .sdims b{color:var(--gold-soft)}
+  .seqlab{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);margin:15px 0 4px}
+  .seq{background:#0a1020;border:1px solid var(--line);border-left:3px solid var(--gold-dim);border-radius:8px;padding:11px 16px;font-size:15.5px;color:var(--ink);font-family:'Cambria Math','Times New Roman',Georgia,serif;letter-spacing:.01em;overflow-x:auto}
+  .ssrc{font-size:11.5px;color:var(--muted2);margin-top:18px;border-top:1px solid var(--line);padding-top:12px;line-height:1.5}
+  .ssrc b{color:var(--muted)}
+  /* transform panel */
+  .gmrow{display:flex;gap:4px;margin-bottom:10px}
+  .gmrow button{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:6px 0;border-radius:7px;font-size:11px}
+  .gmrow button.on{background:var(--panel2);color:var(--gold-soft);border-color:var(--gold-dim)}
+  .gmrow button:hover{color:var(--ink)}
+  .xyz{display:grid;grid-template-columns:13px 1fr 13px 1fr 13px 1fr;gap:5px;align-items:center;margin:5px 0}
+  .xyz span{font-family:var(--mono);font-size:10px;color:var(--gold-dim);text-align:center}
+  .xyz input{width:100%;background:#0a1020;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:5px 4px;font-family:var(--mono);font-size:11px;text-align:right;-moz-appearance:textfield}
+  .xyz input:focus{outline:none;border-color:var(--gold-dim)}
+  .xyz input::-webkit-outer-spin-button,.xyz input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .tflab{font-size:10.5px;color:var(--muted);margin:9px 0 1px;display:flex;justify-content:space-between}
+  .tflab small{color:var(--muted2);font-family:var(--mono)}
+  #tfReset{width:100%;margin-top:11px;background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:7px;border-radius:7px;font-size:11px;font-family:var(--mono)}
+  #tfReset:hover{border-color:var(--gold-dim);color:var(--gold-soft)}
+  #gizmoNA{display:none;font-size:10px;color:var(--mountain);margin-top:7px;line-height:1.4}
+  /* number spinners — 3ds-max style */
+  .spin{display:flex;align-items:stretch;width:100%}
+  .spin>input{flex:1;min-width:0;border-radius:6px 0 0 6px!important;border-right:none!important;text-align:right}
+  .spinbtns{display:flex;flex-direction:column;width:15px;flex:none;cursor:ns-resize;user-select:none}
+  .spinbtns button{flex:1;border:1px solid var(--line);background:var(--panel);color:var(--muted2);font-size:7px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center}
+  .spinbtns button:first-child{border-radius:0 6px 0 0;border-bottom:none}
+  .spinbtns button:last-child{border-radius:0 0 6px 0}
+  .spinbtns:hover{background:var(--panel2)}
+  .spinbtns button:hover{background:var(--panel2);color:var(--gold-soft)}
+  /* parameter rows: editable number + slider */
+  .prow{display:flex;align-items:center;gap:8px;margin-top:5px}
+  .prow .spin{width:auto;flex:none}
+  .prow .pnum{width:60px;flex:none;background:#0a1020;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:5px 6px;font-family:var(--mono);font-size:11.5px;text-align:right;-moz-appearance:textfield}
+  .prow .pnum::-webkit-outer-spin-button,.prow .pnum::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .prow .prange{flex:1;min-width:0}
+  .punit{color:var(--muted2);font-family:var(--mono);font-size:10px;font-weight:400;margin-left:6px}
+  /* gizmo space toggle */
+  .gmrow2{display:flex;gap:4px;margin:-4px 0 10px}
+  .gmrow2 button{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:5px 0;border-radius:6px;font-size:10px;font-family:var(--mono)}
+  .gmrow2 button.on{background:var(--panel2);color:var(--gold-soft);border-color:var(--gold-dim)}
+  .gmrow2 button:hover{color:var(--ink)}
+  /* paper / print panel */
+  .pf{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:7px 0}
+  .pf label{font-size:11.5px;color:var(--muted)}
+  .pf small{color:var(--muted2);font-family:var(--mono)}
+  #paperSize,#dfAxis{background:#0a1020;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:6px 8px;font-size:11.5px;font-family:var(--mono);min-width:130px}
+  .pchoice{width:100%;background:#0a1020;border:1px solid var(--line);color:var(--gold-soft);border-radius:6px;padding:7px 9px;font-size:12px;font-family:var(--mono);margin-top:5px;cursor:pointer}
+  .pchoice:focus{outline:none;border-color:var(--gold-dim)}
+  #paperM{width:60px;background:#0a1020;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:5px 6px;font-family:var(--mono);font-size:11.5px;text-align:right;-moz-appearance:textfield}
+  #paperM::-webkit-outer-spin-button,#paperM::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  .pgrow{margin:7px 0}
+  .seg{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+  .seg button{flex:1;background:var(--panel);border:none;border-right:1px solid var(--line);color:var(--muted);padding:7px 0;font-size:11px}
+  .seg button:last-child{border-right:none}
+  .seg button.on{background:var(--panel2);color:var(--gold-soft)}
+  .seg button:hover{color:var(--ink)}
+  .pgline{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);margin:9px 0 6px;cursor:pointer}
+  .pgline input{accent-color:var(--gold-soft)}
+  #paperInfo{margin:6px 0 10px;line-height:1.5}
+  #paperInfo b{color:var(--gold-soft)}
+  .printbtn{width:100%;background:linear-gradient(180deg,#2a2410,#1c180a);border:1px solid var(--gold-dim);color:var(--gold-soft);padding:10px;border-radius:8px;font-size:12.5px;font-family:var(--mono);letter-spacing:.04em}
+  .printbtn:hover{background:#332a12}
+  /* print output */
+  #printroot{display:none}
+  @media print{
+    html,body{background:#fff!important}
+    body>*{display:none!important}
+    #printroot{display:block!important;position:absolute;left:0;top:0;width:100%}
+    #printroot svg{display:block;width:100%;height:auto}
+  }
+</style>
+</head>
+<body>
+<div id="top">
+  <div id="brand">ORU<small>ORIGAMI STUDIO</small></div>
+  <select id="tabs" title="Choose fold pattern"></select>
+  <button class="topbtn" id="fitbtn" title="Recenter view">&#10227; view</button>
+  <div style="position:relative">
+    <button class="topbtn gold" id="exportbtn">&#10515; export &#9662;</button>
+    <div id="exmenu">
+      <div class="gh">3D folded model</div>
+      <button data-x="stl">STL &mdash; mesh / print</button>
+      <button data-x="obj">OBJ &mdash; mesh / CAD</button>
+      <hr>
+      <div class="gh">2D fabrication sheet</div>
+      <button data-x="dxf">DXF &mdash; CAD crease sheet</button>
+      <button data-x="svg">SVG &mdash; vector crease sheet</button>
+      <hr>
+      <div class="gh">Data</div>
+      <button data-x="json">JSON &mdash; full model</button>
+    </div>
+  </div>
+</div>
+<div id="sciModal"><div id="sciCard"><button id="sciClose">&times;</button><div id="sciBody"></div></div></div>
+<div id="app">
+  <div class="pane" id="left">
+    <div class="sct" style="padding-top:2px">
+      <div class="exrow">
+        <button id="saveProj" class="exbtn">Save<small>project &middot; .json</small></button>
+        <button id="loadProj" class="exbtn">Load<small>open project</small></button>
+      </div>
+      <input id="loadFile" type="file" accept="application/json,.json" style="display:none">
+    </div>
+    <div class="sct" id="ptinfo">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+        <div class="ptitle" id="ptitle">&mdash;</div>
+        <button class="scibtn" id="sciBtn">&#9432; science</button>
+      </div>
+      <div class="pdesc" id="pdesc">&mdash;</div>
+      <div class="pmeta" id="pmeta"></div>
+    </div>
+    <div class="sct"><h3>Parameters</h3><div id="params"></div></div>
+    <div class="sct" id="capWrap" style="display:none">
+      <label class="pgline"><input type="checkbox" id="capEnds"> cap ends &mdash; close the tube</label>
+    </div>
+    <div class="sct">
+      <h3>Deform &middot; modifier stack</h3>
+      <div class="pf"><label>Axis</label>
+        <select id="dfAxis"><option value="auto">Auto (longest)</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></div>
+      <div id="deformBox"></div>
+      <button id="dfReset" class="xreset">Reset deform</button>
+    </div>
+    <div class="credit">Developed by Dr. Samer El Sayary &#169; All Rights Reserved</div>
+  </div>
+  <div id="center">
+    <canvas id="cv"></canvas>
+    <div id="legend">
+      <div><i class="lm"></i> mountain</div>
+      <div><i class="lv"></i> valley</div>
+      <div><i class="lb"></i> boundary</div>
+    </div>
+    <div id="hud"></div>
+    <div id="foldbar">
+      <button id="playbtn">&#9654;</button>
+      <span class="flabel">FLAT</span>
+      <input type="range" id="fold" min="0" max="1000" value="1000">
+      <span class="flabel">FOLDED</span>
+    </div>
+  </div>
+  <div class="pane" id="right">
+    <div class="sct">
+      <h3>2D crease pattern &middot; unfolded</h3>
+      <div class="previewcap" id="prevcap">flat sheet</div>
+      <div id="svgwrap"><svg id="prev" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"></svg></div>
+      <div class="exrow" style="margin-top:9px">
+        <button class="exbtn" data-x="dxf">DXF<small>CAD crease sheet</small></button>
+        <button class="exbtn" data-x="svg">SVG<small>vector crease sheet</small></button>
+      </div>
+    </div>
+    <div class="sct">
+      <h3>Print sheet &middot; unfold on paper</h3>
+      <div class="pf"><label>Paper size</label>
+        <select id="paperSize">
+          <option>A4</option><option>A3</option><option>A2</option><option>A1</option><option>A0</option>
+          <option>Letter</option><option>Legal</option><option>Tabloid</option><option value="Custom">Custom&hellip;</option>
+        </select></div>
+      <div id="customWrap" class="xyz" style="display:none;margin:6px 0">
+        <span>W</span><input id="paperW" type="number" step="1" value="210"><span>H</span><input id="paperH" type="number" step="1" value="297"><span>mm</span><span></span>
+      </div>
+      <div class="pgrow"><div class="seg"><button id="orP" class="on">Portrait</button><button id="orL">Landscape</button></div></div>
+      <div class="pgrow"><div class="seg"><button id="scFit" class="on">Fit to page</button><button id="scAct">Actual 1:1</button></div></div>
+      <div class="pf"><label>Margin <small>mm</small></label><input id="paperM" type="number" step="1" min="0" max="60" value="10"></div>
+      <label class="pgline"><input type="checkbox" id="showPage"> show page outline in preview</label>
+      <div id="paperInfo" class="note">&mdash;</div>
+      <button id="printBtn" class="printbtn">Print / Save as PDF</button>
+    </div>
+    <div class="sct">
+      <h3>Transform &middot; handles + numeric</h3>
+      <div class="gmrow">
+        <button data-gm="translate">Move</button>
+        <button data-gm="rotate">Rotate</button>
+        <button data-gm="scale">Scale</button>
+        <button data-gm="off">Off</button>
+      </div>
+      <div class="gmrow2"><button id="spWorld" class="on">World</button><button id="spLocal">Local</button><button id="gzMinus">&ndash; size</button><button id="gzPlus">+ size</button></div>
+      <div class="tflab">Move <small>mm</small></div>
+      <div class="xyz"><span>X</span><input id="tf_pos_0" data-tf="pos_0" type="number" step="1"><span>Y</span><input id="tf_pos_1" data-tf="pos_1" type="number" step="1"><span>Z</span><input id="tf_pos_2" data-tf="pos_2" type="number" step="1"></div>
+      <div class="tflab">Rotate <small>deg</small></div>
+      <div class="xyz"><span>X</span><input id="tf_rot_0" data-tf="rot_0" type="number" step="1"><span>Y</span><input id="tf_rot_1" data-tf="rot_1" type="number" step="1"><span>Z</span><input id="tf_rot_2" data-tf="rot_2" type="number" step="1"></div>
+      <div class="tflab">Scale <small>&times;</small></div>
+      <div class="xyz"><span>X</span><input id="tf_scl_0" data-tf="scl_0" type="number" step="0.05"><span>Y</span><input id="tf_scl_1" data-tf="scl_1" type="number" step="0.05"><span>Z</span><input id="tf_scl_2" data-tf="scl_2" type="number" step="0.05"></div>
+      <div class="tflab">Dimensions L&middot;H&middot;W <small>mm</small></div>
+      <div class="xyz"><span>L</span><input id="tf_dim_0" data-tf="dim_0" type="number" step="1"><span>H</span><input id="tf_dim_1" data-tf="dim_1" type="number" step="1"><span>W</span><input id="tf_dim_2" data-tf="dim_2" type="number" step="1"></div>
+      <button id="tfReset">reset transform</button>
+      <div id="gizmoNA">3D handles couldn't load (offline) &mdash; numeric transform is active.</div>
+    </div>
+    <div class="sct">
+      <h3>Display</h3>
+      <div class="toggle">Folded faces <div class="sw on" data-t="faces"><i></i></div></div>
+      <div class="toggle">Crease lines (M/V) <div class="sw on" data-t="creases"><i></i></div></div>
+      <div class="toggle">Wireframe <div class="sw" data-t="wire"><i></i></div></div>
+      <div class="toggle">Flat overlay (ghost) <div class="sw" data-t="ghost"><i></i></div></div>
+      <div class="toggle">Auto-rotate <div class="sw" data-t="spin"><i></i></div></div>
+      <div class="toggle">Grid + axes <div class="sw on" data-t="grid"><i></i></div></div>
+    </div>
+    <div class="sct"><h3>3D export</h3>
+      <div class="exrow">
+        <button class="exbtn" data-x="stl">STL<small>mesh / 3D print</small></button>
+        <button class="exbtn" data-x="obj">OBJ<small>mesh / CAD</small></button>
+      </div>
+    </div>
+    <div class="note" id="readout"></div>
+    <div class="note">Open in a browser &middot; drag to orbit &middot; scroll to zoom &middot; right-drag to pan. If a fresh build looks stale, hard-refresh (<b style="color:var(--gold-soft)">Ctrl+Shift+R</b>).</div>
+  </div>
+</div>
+<style id="pagestyle"></style>
+<div id="printroot"></div>
+<script>
+/* ============================================================
+   ORU — Parametric Origami Studio
+   All geometry is pure math. One model feeds the 3D mesh, the
+   fold animation and the 2D fabrication sheet:
+     { v3:[[x,y,z]], v2:[[x,y]], tris:[[i,j,k]], creases:[[i,j,'M'|'V'|'B']], meta }
+   Convention: Y is up. v2 is the flat (unfolded) crease pattern.
+   ============================================================ */
+const PI=Math.PI, TAU=2*PI, cos=Math.cos, sin=Math.sin, sqrt=Math.sqrt;
+const d2r=d=>d*PI/180, clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+// triangles for a (cols+1)x(rows+1) grid; idx(i,j) -> vertex index
+function gridTris(cols,rows,idx,wrap=false){
+  const T=[]; const ci=wrap?cols+1:cols;
+  for(let i=0;i<ci;i++){const i2=(i+1)%(cols+1);
+    for(let j=0;j<rows;j++) T.push([idx(i,j),idx(i2,j),idx(i2,j+1)],[idx(i,j),idx(i2,j+1),idx(i,j+1)]);
+  } return T;
+}
+const GEN={};
+
+/* 1. MIURA-ORI — verified closed form (edges invariant, 2D auxetic) */
+GEN.miura={ label:'Miura-ori', dev:true,
+  desc:'The reference auxetic. Developable, rigid-foldable, single DOF — compresses in both directions at once.',
+  meta:[['developable','dev'],['rigid-fold',''],['flat-fold',''],['1 DOF',''],['ν < 0','']],
+  params:[{k:'nx',l:'cells X',min:1,max:200,step:1,v:6},{k:'ny',l:'cells Y',min:1,max:200,step:1,v:5},
+    {k:'a',l:'side a',min:5,max:200,step:1,v:22,u:'mm'},{k:'b',l:'side b',min:5,max:200,step:1,v:26,u:'mm'},
+    {k:'g',l:'angle γ',min:20,max:80,step:1,v:55,u:'°'}],
+  build(p,t){
+    const g=d2r(p.g), th=t*g*0.998;
+    const lx=p.a*cos(th), lz=p.a*sin(th), mx=p.b*cos(g)/cos(th), my=sqrt(Math.max(0,p.b*p.b-mx*mx));
+    const mx0=p.b*cos(g), my0=p.b*sin(g), NX=p.nx, NY=p.ny;
+    const v3=[],v2=[], idx=(i,j)=>i*(NY+1)+j;
+    for(let i=0;i<=NX;i++)for(let j=0;j<=NY;j++){ v3.push([i*lx+(j%2)*mx,(i%2)*lz,j*my]); v2.push([i*p.a+(j%2)*mx0,j*my0]); }
+    const tris=gridTris(NX,NY,idx), cr=[];
+    for(let i=0;i<=NX;i++)for(let j=0;j<NY;j++){ const tp=((i+j)%2===0)?'M':'V'; cr.push([idx(i,j),idx(i,j+1),(i===0||i===NX)?'B':tp]); }
+    for(let i=0;i<NX;i++)for(let j=0;j<=NY;j++){ const tp=(j%2===0)?'M':'V'; cr.push([idx(i,j),idx(i+1,j),(j===0||j===NY)?'B':tp]); }
+    return {v3,v2,tris,creases:cr,meta:{dev:true}};
+  }};
+
+/* 2. YOSHIMURA / diamond cylinder */
+GEN.yoshimura={ label:'Yoshimura · diamond', dev:true,
+  desc:'Axial-compression buckling of a tube. A faceted cylinder, very stiff along its axis. Fold = axial deployment.',
+  meta:[['developable','dev'],['rigid-fold',''],['cylinder',''],['degree-6',''],['1 DOF','']],
+  params:[{k:'n',l:'sides n',min:4,max:200,step:1,v:8},{k:'rows',l:'rings m',min:1,max:200,step:1,v:6},
+    {k:'L',l:'crease L',min:10,max:200,step:1,v:34,u:'mm'},{k:'b',l:'sector β',min:18,max:60,step:1,v:34,u:'°'}],
+  build(p,t){
+    const n=p.n, R=p.L/(2*sin(PI/n)), beta=d2r(p.b), slant=(p.L/2)/cos(beta), half=2*R*sin(PI/(2*n));
+    const dzMax=sqrt(Math.max(1e-4,slant*slant-half*half)), dz=Math.max(0.001,t)*dzMax;
+    const fh=sqrt(Math.max(1e-4,slant*slant-(p.L/2)*(p.L/2)));
+    const v3=[],v2=[], idx=(k,r)=>r*n+k;
+    for(let r=0;r<=p.rows;r++)for(let k=0;k<n;k++){ const a=TAU*k/n+(r%2)*(PI/n);
+      v3.push([R*cos(a),r*dz,R*sin(a)]); v2.push([k*p.L+(r%2)*(p.L/2),r*fh]); }
+    const tris=[],cr=[];
+    for(let r=0;r<p.rows;r++)for(let k=0;k<n;k++){ const k1=(k+1)%n;
+      tris.push([idx(k,r),idx(k1,r),idx(k,r+1)],[idx(k1,r),idx(k1,r+1),idx(k,r+1)]);
+      cr.push([idx(k,r),idx(k1,r),'V'],[idx(k,r),idx(k,r+1),'M'],[idx(k1,r),idx(k,r+1),'M']); }
+    for(let k=0;k<n;k++){const k1=(k+1)%n; cr.push([idx(k,p.rows),idx(k1,p.rows),'V']);}
+    return {v3,v2,tris,creases:cr,meta:{dev:true,cyl:true}};
+  }};
+
+/* 3. KRESLING — twist-coupled bistable bellows */
+GEN.kresling={ label:'Kresling', dev:true,
+  desc:'Torsional buckling — folding couples to twist (bistable). Stacked segments mirror twist to form a bellows.',
+  meta:[['developable','dev'],['non-rigid','nd'],['bistable',''],['twist',''],['degree-6','']],
+  params:[{k:'n',l:'sides n',min:4,max:200,step:1,v:6},{k:'segs',l:'segments',min:1,max:200,step:1,v:5},
+    {k:'R',l:'radius R',min:10,max:200,step:1,v:26,u:'mm'},{k:'H',l:'seg height',min:6,max:200,step:1,v:22,u:'mm'},
+    {k:'lam',l:'ratio λ',min:0.3,max:1.6,step:0.05,v:0.8}],
+  build(p,t){
+    const n=p.n, R=p.R, gp=PI/2-PI/n, phi0=gp*p.lam, b2=p.H*p.H+2*R*R*(1-cos(phi0));
+    const phi=clamp(t,0.001,1)*phi0, H=sqrt(Math.max(0.001,b2-2*R*R*(1-cos(phi))));
+    const se=2*R*sin(PI/n), fr=sqrt(Math.max(1e-3,b2));
+    const v3=[],v2=[], idx=(k,s)=>s*n+k;
+    for(let s=0;s<=p.segs;s++)for(let k=0;k<n;k++){ const a=TAU*k/n+(s%2)*phi;
+      v3.push([R*cos(a),s*H,R*sin(a)]); v2.push([k*se+(s%2)*(se*0.5),s*fr*0.5]); }
+    const tris=[],cr=[];
+    for(let s=0;s<p.segs;s++)for(let k=0;k<n;k++){ const k1=(k+1)%n;
+      tris.push([idx(k,s),idx(k1,s),idx(k,s+1)],[idx(k1,s),idx(k1,s+1),idx(k,s+1)]);
+      cr.push([idx(k,s),idx(k,s+1),'V'],[idx(k1,s),idx(k,s+1),'M'],[idx(k,s),idx(k1,s),'B']); }
+    for(let k=0;k<n;k++){const k1=(k+1)%n; cr.push([idx(k,p.segs),idx(k1,p.segs),'B']);}
+    return {v3,v2,tris,creases:cr,meta:{dev:true,cyl:true}};
+  }};
+
+/* 4. WATERBOMB tessellation (square base: X diagonals + cross mid-lines) */
+GEN.waterbomb={ label:'Waterbomb', dev:true,
+  desc:'The waterbomb base tiled — the "magic-ball" surface. Square base with diagonal mountains and cross valleys.',
+  meta:[['developable','dev'],['flat-fold',''],['degree-6/8',''],['multi-DOF','']],
+  params:[{k:'nx',l:'cells X',min:1,max:200,step:1,v:5},{k:'ny',l:'cells Y',min:1,max:200,step:1,v:4},
+    {k:'u',l:'cell size',min:8,max:200,step:1,v:20,u:'mm'},{k:'amp',l:'pop height',min:0,max:1.4,step:0.05,v:0.85}],
+  build(p,t){
+    const NX=2*p.nx, NY=2*p.ny, h=p.u/2, amp=p.amp*p.u*t;
+    const v3=[],v2=[], idx=(i,j)=>i*(NY+1)+j;
+    for(let i=0;i<=NX;i++)for(let j=0;j<=NY;j++){ const oi=i%2,oj=j%2; let z=0;
+      if(oi&&oj)z=amp; else if(!oi&&!oj)z=0; else z=-amp*0.5*sin(t*PI);
+      v3.push([i*h,z,j*h]); v2.push([i*h,j*h]); }
+    const tris=gridTris(NX,NY,idx), cr=[];
+    for(let i=0;i<NX;i+=2)for(let j=0;j<NY;j+=2){ const c=idx(i+1,j+1);
+      cr.push([idx(i,j),c,'M'],[idx(i+2,j),c,'M'],[idx(i+2,j+2),c,'M'],[idx(i,j+2),c,'M']);
+      cr.push([idx(i+1,j),c,'V'],[idx(i+1,j+2),c,'V'],[idx(i,j+1),c,'V'],[idx(i+2,j+1),c,'V']); }
+    for(let i=0;i<NX;i++)cr.push([idx(i,0),idx(i+1,0),'B'],[idx(i,NY),idx(i+1,NY),'B']);
+    for(let j=0;j<NY;j++)cr.push([idx(0,j),idx(0,j+1),'B'],[idx(NX,j),idx(NX,j+1),'B']);
+    return {v3,v2,tris,creases:cr,meta:{dev:true,approx:true}};
+  }};
+
+/* 5. RON RESCH triangular tessellation (two grids, twist tucks) */
+GEN.resch={ label:'Ron Resch', dev:true,
+  desc:'Twist-tuck triangulation. Stiff yet doubly-curvable — the ancestor of folded-plate domes.',
+  meta:[['developable','dev'],['rigid under sym.',''],['degree-6',''],['doubly-curvable','']],
+  params:[{k:'N',l:'divisions',min:2,max:200,step:1,v:6},{k:'g',l:'grid g',min:10,max:200,step:1,v:20,u:'mm'},
+    {k:'tw',l:'tuck rise',min:0,max:1.3,step:0.05,v:0.8}],
+  build(p,t){
+    const N=p.N, g=p.g, rise=p.tw*g*t, ax=g, ay=g*sqrt(3)/2;
+    const v3=[],v2=[], map={}, key=(i,j)=>i+'_'+j; let id=0;
+    for(let j=0;j<=N;j++)for(let i=0;i<=N;i++){ const x=i*ax+j*ax*0.5, y=j*ay;
+      const lift=rise*sin(PI*i/N)*sin(PI*j/N);
+      map[key(i,j)]=id++; v3.push([x,lift,y]); v2.push([x,y]); }
+    const tris=[],cr=[];
+    for(let j=0;j<N;j++)for(let i=0;i<N;i++){ const a=map[key(i,j)],b=map[key(i+1,j)],c=map[key(i,j+1)],d=map[key(i+1,j+1)];
+      tris.push([a,b,c],[b,d,c]); cr.push([a,b,'M'],[a,c,'M'],[b,c,'V']); }
+    for(let i=0;i<N;i++)cr.push([map[key(i,N)],map[key(i+1,N)],'B']);
+    for(let j=0;j<N;j++)cr.push([map[key(N,j)],map[key(N,j+1)],'B'],[map[key(0,j)],map[key(0,j+1)],'B']);
+    return {v3,v2,tris,creases:cr,meta:{dev:true,approx:true}};
+  }};
+/* 6. EGGBOX — non-developable, alternating bumps (+ν) */
+GEN.eggbox={ label:'Eggbox', dev:false,
+  desc:'Non-developable — formed, not folded. Positive in-plane Poisson ratio, opposite of Miura.',
+  meta:[['non-developable','nd'],['degree-4',''],['1 DOF',''],['ν > 0','']],
+  params:[{k:'nx',l:'cells X',min:1,max:200,step:1,v:6},{k:'ny',l:'cells Y',min:1,max:200,step:1,v:6},
+    {k:'a',l:'pitch a',min:8,max:200,step:1,v:20,u:'mm'},{k:'amp',l:'bump h',min:0,max:1.2,step:0.05,v:0.7}],
+  build(p,t){
+    const NX=2*p.nx, NY=2*p.ny, u=p.a/2, H=p.amp*p.a*t;
+    const v3=[],v2=[], idx=(i,j)=>i*(NY+1)+j;
+    for(let i=0;i<=NX;i++)for(let j=0;j<=NY;j++){ const oi=i%2,oj=j%2; let z=0;
+      if(oi&&oj)z=H; else if(!oi&&!oj)z=-H; v3.push([i*u,z,j*u]); v2.push([i*u,j*u]); }
+    const tris=gridTris(NX,NY,idx), cr=[];
+    for(let i=0;i<NX;i++)for(let j=0;j<=NY;j++){ const tp=(j%2)?'V':'M'; cr.push([idx(i,j),idx(i+1,j),(j===0||j===NY)?'B':tp]); }
+    for(let i=0;i<=NX;i++)for(let j=0;j<NY;j++){ const tp=(i%2)?'M':'V'; cr.push([idx(i,j),idx(i,j+1),(i===0||i===NX)?'B':tp]); }
+    return {v3,v2,tris,creases:cr,meta:{dev:false,nondev:true}};
+  }};
+
+/* 7. HYPAR — concentric pleats folding to a saddle (triangulated grid) */
+GEN.hypar={ label:'Hyperbolic paraboloid', dev:true,
+  desc:'Concentric pleats folding to a saddle z = c·(x²−y²). Developable when triangulated with diagonals.',
+  meta:[['concentric pleats',''],['triangulated',''],['saddle','']],
+  params:[{k:'rings',l:'rings',min:2,max:200,step:1,v:9},{k:'w',l:'pleat w',min:4,max:200,step:1,v:8,u:'mm'},
+    {k:'c',l:'curvature',min:0.1,max:1.3,step:0.05,v:0.7}],
+  build(p,t){
+    const R=p.rings, w=p.w, NX=2*R, ext=R*w;
+    const v3=[],v2=[], idx=(i,j)=>i*(NX+1)+j;
+    for(let i=0;i<=NX;i++)for(let j=0;j<=NX;j++){
+      const x=-ext+i*w, y=-ext+j*w;
+      const ring=Math.max(Math.abs(i-R),Math.abs(j-R));
+      const saddle=p.c*(x*x-y*y)/(ext||1);
+      const pleat=(ring%2? 1:-1)*w*0.14;
+      const z=t*(saddle+pleat);
+      v3.push([x,z,y]); v2.push([x,y]); }
+    const tris=gridTris(NX,NX,idx), cr=[];
+    // concentric square pleat lines alternate M/V; radial lines = boundary feel
+    for(let i=0;i<NX;i++)for(let j=0;j<=NX;j++){ const ring=Math.max(Math.abs(i+0.5-R),Math.abs(j-R));
+      const tp=(Math.round(ring)%2)?'M':'V'; cr.push([idx(i,j),idx(i+1,j),(i===0||i===NX-1)?'B':tp]); }
+    for(let i=0;i<=NX;i++)for(let j=0;j<NX;j++){ const ring=Math.max(Math.abs(i-R),Math.abs(j+0.5-R));
+      const tp=(Math.round(ring)%2)?'V':'M'; cr.push([idx(i,j),idx(i,j+1),(j===0||j===NX-1)?'B':tp]); }
+    return {v3,v2,tris,creases:cr,meta:{dev:true,approx:true}};
+  }};
+
+/* 8. TACHI-MIURA POLYHEDRON — rigid-foldable Miura bellows tube */
+GEN.tmp={ label:'Tachi-Miura polyhedron', dev:true,
+  desc:'A rigid-foldable bellows from paired Miura sheets — a deployable flat-folding tube. Fold = axial collapse.',
+  meta:[['developable','dev'],['rigid-fold',''],['flat-fold',''],['bellows',''],['1 DOF','']],
+  params:[{k:'n',l:'sides n',min:4,max:200,step:1,v:6},{k:'rings',l:'rings m',min:1,max:200,step:1,v:6},
+    {k:'R',l:'radius R',min:10,max:200,step:1,v:26,u:'mm'},{k:'amp',l:'fold depth',min:0.05,max:0.7,step:0.05,v:0.35}],
+  build(p,t){
+    const n=p.n, R=p.R, dr=p.amp*R*(0.4+0.6*t), hzMax=R*1.6;
+    const hz=hzMax*(1-0.85*t)/p.rings*p.rings/p.rings; // axial compresses with fold
+    const step=hzMax*(1-0.8*t);
+    const se=2*R*sin(PI/n);
+    const v3=[],v2=[], idx=(k,r)=>r*n+k;
+    for(let r=0;r<=p.rings;r++)for(let k=0;k<n;k++){ const a=TAU*k/n;
+      const sign=((k+r)%2)?1:-1, rad=R+sign*dr;
+      v3.push([rad*cos(a),r*step,rad*sin(a)]); v2.push([k*se+(r%2)*(se*0.5),r*hzMax*0.4]); }
+    const tris=[],cr=[];
+    for(let r=0;r<p.rings;r++)for(let k=0;k<n;k++){ const k1=(k+1)%n;
+      tris.push([idx(k,r),idx(k1,r),idx(k,r+1)],[idx(k1,r),idx(k1,r+1),idx(k,r+1)]);
+      cr.push([idx(k,r),idx(k1,r),((k%2)?'M':'V')],[idx(k,r),idx(k,r+1),((r%2)?'V':'M')]); }
+    for(let k=0;k<n;k++){const k1=(k+1)%n; cr.push([idx(k,p.rings),idx(k1,p.rings),'B']);}
+    return {v3,v2,tris,creases:cr,meta:{dev:true,cyl:true}};
+  }};
+
+/* 9. SQUARE TWIST — rotating squares + pleats (bistable, non-rigid) */
+GEN.twist={ label:'Square twist', dev:true,
+  desc:'A central square rotates as four flaps fold. Flat-foldable but non-rigid — it snaps (bistable).',
+  meta:[['developable','dev'],['non-rigid','nd'],['flat-fold',''],['bistable','']],
+  params:[{k:'nx',l:'cells X',min:1,max:200,step:1,v:4},{k:'ny',l:'cells Y',min:1,max:200,step:1,v:4},
+    {k:'l',l:'square ℓ',min:8,max:200,step:1,v:18,u:'mm'},{k:'gap',l:'pleat',min:2,max:200,step:1,v:8,u:'mm'}],
+  build(p,t){
+    const l=p.l, gap=p.gap, pitch=l+gap, om=t*PI/2, lift=t*l*0.45, hl=l/2;
+    const v3=[],v2=[],tris=[],cr=[]; 
+    // central squares (rotating), connected by pleat quads to neighbours
+    const cornersFlat=[[-hl,-hl],[hl,-hl],[hl,hl],[-hl,hl]];
+    const sq=[];
+    for(let i=0;i<p.nx;i++)for(let j=0;j<p.ny;j++){
+      const cx=i*pitch, cy=j*pitch, base=v3.length, b2=[];
+      for(const [cxr,cyr] of cornersFlat){
+        const x=cx+cxr*cos(om)-cyr*sin(om), y=cy+cxr*sin(om)+cyr*cos(om);
+        v3.push([x,lift,y]); v2.push([cx+cxr,cy+cyr]); b2.push(base+(b2.length));
+      }
+      tris.push([base,base+1,base+2],[base,base+2,base+3]);
+      cr.push([base,base+1,'V'],[base+1,base+2,'V'],[base+2,base+3,'V'],[base+3,base,'V']);
+      // diagonal twist creases (mountain)
+      cr.push([base,base+2,'M']);
+      sq.push({i,j,base});
+    }
+    // pleat connectors between horizontally/vertically adjacent squares
+    const sqAt={}; sq.forEach(s=>sqAt[s.i+'_'+s.j]=s);
+    function bridge(A,B,ca,cb){ // connect corner ca of A to corner cb of B with a quad to base grid
+      tris.push([A.base+ca[0],A.base+ca[1],B.base+cb[1]],[A.base+ca[0],B.base+cb[1],B.base+cb[0]]);
+      cr.push([A.base+ca[0],B.base+cb[0],'M'],[A.base+ca[1],B.base+cb[1],'M']);
+    }
+    sq.forEach(s=>{ const r=sqAt[(s.i+1)+'_'+s.j]; if(r) bridge(s,r,[1,2],[0,3]);
+      const u=sqAt[s.i+'_'+(s.j+1)]; if(u) bridge(s,u,[3,2],[0,1]); });
+    return {v3,v2,tris,creases:cr,meta:{dev:true,approx:true}};
+  }};
+
+/* 10. DIAGONAL / SPIRAL — torsional parallelogram cylinder */
+GEN.diagonal={ label:'Diagonal · spiral', dev:true,
+  desc:'Torsional cylinder buckling — parallelograms folding on diagonals. Twist accumulates into a spiral.',
+  meta:[['developable','dev'],['non-rigid','nd'],['cylinder',''],['torsional','']],
+  params:[{k:'n',l:'facets n',min:4,max:200,step:1,v:9},{k:'rows',l:'rings m',min:1,max:200,step:1,v:8},
+    {k:'R',l:'radius R',min:10,max:200,step:1,v:24,u:'mm'},{k:'eta',l:'helix η',min:5,max:55,step:1,v:28,u:'°'}],
+  build(p,t){
+    const n=p.n, R=p.R, eta=d2r(p.eta), twist=t*(TAU/n), hz=(TAU*R/n)*Math.tan(eta)*(1-0.4*t);
+    const se=2*R*sin(PI/n);
+    const v3=[],v2=[], idx=(k,r)=>r*n+k;
+    for(let r=0;r<=p.rows;r++)for(let k=0;k<n;k++){ const a=TAU*k/n+r*twist;
+      v3.push([R*cos(a),r*hz,R*sin(a)]); v2.push([k*se+r*(se*Math.tan(eta)*0.3),r*hz]); }
+    const tris=[],cr=[];
+    for(let r=0;r<p.rows;r++)for(let k=0;k<n;k++){ const k1=(k+1)%n;
+      tris.push([idx(k,r),idx(k1,r),idx(k1,r+1)],[idx(k,r),idx(k1,r+1),idx(k,r+1)]);
+      cr.push([idx(k,r),idx(k,r+1),'M'],[idx(k,r),idx(k1,r),'V'],[idx(k,r),idx(k1,r+1),'V']); }
+    for(let k=0;k<n;k++){const k1=(k+1)%n; cr.push([idx(k,p.rows),idx(k1,p.rows),'V']);}
+    return {v3,v2,tris,creases:cr,meta:{dev:true,cyl:true}};
+  }};
+
+GEN.accordion={ label:'Accordion · pleat', dev:true,
+  desc:'The fundamental developable corrugation — parallel mountain/valley folds. Single curvature, rigid, packs flat along one axis.',
+  meta:[['developable','dev'],['rigid-fold',''],['1 DOF',''],['single-curve','']],
+  params:[{k:'n',l:'pleats',min:2,max:200,step:1,v:14},{k:'W',l:'width',min:10,max:200,step:1,v:90,u:'mm'},
+    {k:'p',l:'pleat pitch',min:4,max:200,step:1,v:14,u:'mm'}],
+  build(p,t){
+    const n=p.n, W=p.W, pit=p.p, al=t*d2r(80), dz=pit*cos(al), hy=pit*sin(al);
+    const v3=[],v2=[], idx=(i,j)=>j*2+i;
+    for(let j=0;j<=n;j++)for(let i=0;i<2;i++){ v3.push([i*W,(j%2)*hy,j*dz]); v2.push([i*W,j*pit]); }
+    const tris=[],cr=[];
+    for(let j=0;j<n;j++) tris.push([idx(0,j),idx(1,j),idx(1,j+1)],[idx(0,j),idx(1,j+1),idx(0,j+1)]);
+    for(let j=1;j<n;j++) cr.push([idx(0,j),idx(1,j),(j%2===1)?'M':'V']);
+    for(let j=0;j<n;j++) cr.push([idx(0,j),idx(0,j+1),'B'],[idx(1,j),idx(1,j+1),'B']);
+    return {v3,v2,tris,creases:cr,meta:{dev:true}};
+  }};
+
+/* 12. FLASHER — spiral-wrapping deployable membrane */
+GEN.flasher={ label:'Flasher · deployable spiral', dev:true,
+  desc:'A spiral-wrapping deployable. A flat polygonal membrane folds into a compact stack and blooms open — the basis of folded solar arrays.',
+  meta:[['developable','dev'],['deployable',''],['spiral',''],['n-fold','']],
+  params:[{k:'n',l:'sides n',min:3,max:200,step:1,v:6},{k:'rings',l:'rings',min:2,max:200,step:1,v:6},
+    {k:'g',l:'ring step',min:4,max:200,step:1,v:14,u:'mm'},{k:'skew',l:'pinwheel',min:0,max:40,step:1,v:12,u:'°'}],
+  build(p,t){
+    const n=p.n, m=p.rings, g=p.g, sk=d2r(p.skew), wmax=(TAU/n);
+    const v3=[],v2=[], idx=(k,i)=>k*n+i;
+    for(let k=0;k<=m;k++){ const Rf=(k+1)*g, Rw=Rf*(1-0.55*t), wrap=t*k*wmax, z=t*k*g*0.5;
+      for(let i=0;i<n;i++){ const af=TAU*i/n+k*sk; v2.push([Rf*cos(af),Rf*sin(af)]); const a3=af+wrap; v3.push([Rw*cos(a3),z,Rw*sin(a3)]); } }
+    const tris=[],cr=[];
+    for(let k=0;k<m;k++)for(let i=0;i<n;i++){ const i1=(i+1)%n;
+      tris.push([idx(k,i),idx(k,i1),idx(k+1,i1)],[idx(k,i),idx(k+1,i1),idx(k+1,i)]);
+      cr.push([idx(k,i),idx(k+1,i),'M'],[idx(k,i),idx(k+1,i1),(k%2?'V':'M')],[idx(k,i),idx(k,i1),'V']); }
+    for(let i=0;i<n;i++){ const i1=(i+1)%n; cr.push([idx(m,i),idx(m,i1),'B']); }
+    return {v3,v2,tris,creases:cr,meta:{dev:true,approx:true}};
+  }};
+
+/* 13. FALTWERK — folded-plate roof (Engel: prismatic / sloped / ridge-to-ridge / ridge-to-valley) */
+GEN.roof={ label:'Faltwerk · folded-plate roof', dev:true,
+  desc:'Engel folded-plate roof: a developable corrugation that spans as a deep beam. The mode sets the amplitude profile — prismatic, sloped (top cut by a plane), ridge-to-ridge (raised centre) or ridge-to-valley (counter-running).',
+  meta:[['developable','dev'],['folded-plate',''],['beam',''],['Engel','']],
+  params:[
+    {k:'mode',type:'choice',l:'fold mode',opts:[{v:'prismatic',t:'Prismatic'},{v:'sloped',t:'Sloped'},{v:'ridge',t:'Ridge-to-ridge'},{v:'valley',t:'Ridge-to-valley'}],v:'prismatic'},
+    {k:'n',l:'bays',min:1,max:200,step:1,v:6},
+    {k:'W',l:'width',min:20,max:200,step:1,v:120,u:'mm'},
+    {k:'L',l:'length',min:20,max:200,step:1,v:160,u:'mm'},
+    {k:'A',l:'fold depth',min:2,max:200,step:1,v:28,u:'mm'},
+    {k:'segs',l:'length segs',min:1,max:200,step:1,v:8},
+    {k:'rise',l:'centre rise',min:0,max:200,step:1,v:40,u:'mm'},
+    {k:'slope',l:'slope',min:0,max:1,step:0.05,v:0.6}],
+  build(p,t){
+    const n=Math.max(1,p.n|0), M=2*n, S=Math.max(1,p.segs|0), W=p.W, L=p.L, A=p.A*t, mode=p.mode||'prismatic', rise=(p.rise||0)*t, slope=p.slope||0;
+    const g=u=>{ const m=((u%2)+2)%2; return 1-Math.abs(m-1); };
+    const idx=(i,j)=>j*(M+1)+i, v3=[],v2=[];
+    for(let j=0;j<=S;j++){ const tz=j/S, z=tz*L;
+      for(let i=0;i<=M;i++){ const x=(i/M)*W-W/2; let y;
+        if(mode==='sloped') y=A*g(i)*(1-slope*tz);
+        else if(mode==='ridge') y=rise*(1-Math.pow(2*tz-1,2))+A*g(i);
+        else if(mode==='valley') y=A*g(i+tz);
+        else y=A*g(i);
+        v3.push([x,y,z]); v2.push([0,z]); } }
+    for(let j=0;j<=S;j++){ let u=0;
+      for(let i=1;i<=M;i++){ const a=v3[idx(i,j)],b=v3[idx(i-1,j)]; u+=Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]); v2[idx(i,j)][0]=u; }
+      const half=u/2; for(let i=0;i<=M;i++) v2[idx(i,j)][0]-=half; }
+    const tris=[],cr=[];
+    for(let j=0;j<S;j++)for(let i=0;i<M;i++){ const a=idx(i,j),b=idx(i+1,j),c=idx(i+1,j+1),d=idx(i,j+1); tris.push([a,b,c],[a,c,d]); }
+    for(let i=1;i<M;i++)for(let j=0;j<S;j++) cr.push([idx(i,j),idx(i,j+1),(i%2===1)?'M':'V']);
+    for(let j=0;j<S;j++) cr.push([idx(0,j),idx(0,j+1),'B'],[idx(M,j),idx(M,j+1),'B']);
+    for(let i=0;i<M;i++) cr.push([idx(i,0),idx(i+1,0),'B'],[idx(i,S),idx(i+1,S),'B']);
+    return {v3,v2,tris,creases:cr,meta:{dev:(mode==='prismatic'),approx:(mode!=='prismatic')}};
+  }};
+
+/* 14. FALTWERK — folded frame & arch (corrugation swept along a silhouette: gable / portal / pointed / round) */
+GEN.frame={ label:'Faltwerk · folded frame & arch', dev:true,
+  desc:'Engel linear folded system: a corrugation swept along a silhouette profile. Profile sets the shape (gable, portal frame, pointed or round arch); mode sets ridge or ridge-to-valley (counter-running) corrugation.',
+  meta:[['folded-plate',''],['frame / arch',''],['linear span',''],['Engel','']],
+  params:[
+    {k:'profile',type:'choice',l:'profile',opts:[{v:'gable',t:'Gable'},{v:'portal',t:'Portal frame'},{v:'pointed',t:'Pointed arch'},{v:'round',t:'Round arch'}],v:'round'},
+    {k:'mode',type:'choice',l:'fold mode',opts:[{v:'ridge',t:'Ridge'},{v:'valley',t:'Ridge-to-valley'}],v:'ridge'},
+    {k:'bays',l:'bays',min:1,max:200,step:1,v:8},
+    {k:'W',l:'span',min:20,max:200,step:1,v:160,u:'mm'},
+    {k:'H',l:'rise',min:10,max:200,step:1,v:70,u:'mm'},
+    {k:'L',l:'depth',min:20,max:200,step:1,v:140,u:'mm'},
+    {k:'A',l:'fold depth',min:1,max:200,step:1,v:18,u:'mm'},
+    {k:'wall',l:'wall (portal)',min:0,max:200,step:1,v:40,u:'mm'},
+    {k:'pseg',l:'profile res',min:3,max:200,step:1,v:22}],
+  build(p,t){
+    const profile=p.profile||'round', mode=p.mode||'ridge';
+    const W=p.W, H=p.H, L=p.L, A=p.A*t, bays=Math.max(1,p.bays|0), wall=p.wall||0, P=Math.max(2,p.pseg|0);
+    let raw=[];
+    if(profile==='gable'){ raw=[[-W/2,0],[0,H],[W/2,0]]; }
+    else if(profile==='portal'){ raw=[[-W/2,0],[-W/2,wall],[0,wall+H],[W/2,wall],[W/2,0]]; }
+    else if(profile==='pointed'){ const N=28;
+      for(let k=0;k<=N;k++){ const u=k/N,mu=1-u; raw.push([mu*mu*(-W/2)+2*mu*u*(-W/2), 2*mu*u*H+u*u*H]); }
+      for(let k=1;k<=N;k++){ const u=k/N,mu=1-u; raw.push([2*mu*u*(W/2)+u*u*(W/2), mu*mu*H+2*mu*u*H]); } }
+    else { const N=44,R=W/2; for(let k=0;k<=N;k++){ const a=Math.PI*(k/N); raw.push([-R*Math.cos(a), H*Math.sin(a)]); } }
+    let cum=[0]; for(let k=1;k<raw.length;k++) cum.push(cum[k-1]+Math.hypot(raw[k][0]-raw[k-1][0],raw[k][1]-raw[k-1][1]));
+    const total=cum[cum.length-1]||1, pt=[];
+    for(let i=0;i<=P;i++){ const s=total*i/P; let k=1; while(k<cum.length-1&&cum[k]<s)k++;
+      const f=(s-cum[k-1])/((cum[k]-cum[k-1])||1); pt.push([raw[k-1][0]+(raw[k][0]-raw[k-1][0])*f, raw[k-1][1]+(raw[k][1]-raw[k-1][1])*f]); }
+    let cgx=0,cgy=0; for(const q of pt){ cgx+=q[0]; cgy+=q[1]; } cgx/=pt.length; cgy/=pt.length;
+    const nrm=[]; for(let i=0;i<=P;i++){ const a=pt[Math.max(0,i-1)],b=pt[Math.min(P,i+1)]; let tx=b[0]-a[0],ty=b[1]-a[1]; const tl=Math.hypot(tx,ty)||1; tx/=tl; ty/=tl; let nx=-ty,ny=tx;
+      if((pt[i][0]-cgx)*nx+(pt[i][1]-cgy)*ny<0){ nx=-nx; ny=-ny; } nrm.push([nx,ny]); }
+    const J=2*bays, g=u=>{ const m=((u%2)+2)%2; return 1-Math.abs(m-1); }, idx=(i,j)=>j*(P+1)+i, v3=[],v2=[];
+    for(let j=0;j<=J;j++){ const z=(j/J)*L;
+      for(let i=0;i<=P;i++){ const ph=(mode==='valley')?(j+(i/P)):j, h=A*g(ph);
+        v3.push([pt[i][0]+nrm[i][0]*h, pt[i][1]+nrm[i][1]*h, z]); v2.push([0,0]); } }
+    let su=[0]; for(let i=1;i<=P;i++) su.push(su[i-1]+Math.hypot(pt[i][0]-pt[i-1][0],pt[i][1]-pt[i-1][1]));
+    const suHalf=su[P]/2;
+    for(let i=0;i<=P;i++){ let dv=0; v2[idx(i,0)]=[su[i]-suHalf,0];
+      for(let j=1;j<=J;j++){ const a=v3[idx(i,j)],b=v3[idx(i,j-1)]; dv+=Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]); v2[idx(i,j)]=[su[i]-suHalf,dv]; } }
+    const tris=[],cr=[];
+    for(let j=0;j<J;j++)for(let i=0;i<P;i++){ const a=idx(i,j),b=idx(i+1,j),c=idx(i+1,j+1),d=idx(i,j+1); tris.push([a,b,c],[a,c,d]); }
+    for(let j=1;j<J;j++)for(let i=0;i<P;i++) cr.push([idx(i,j),idx(i+1,j),(j%2===1)?'M':'V']);
+    for(let i=1;i<P;i++){ const a=pt[i-1],b=pt[i],c=pt[i+1]; const v1x=b[0]-a[0],v1y=b[1]-a[1],v2x=c[0]-b[0],v2y=c[1]-b[1];
+      const dot=(v1x*v2x+v1y*v2y)/((Math.hypot(v1x,v1y)||1)*(Math.hypot(v2x,v2y)||1));
+      if(dot<0.985){ for(let j=0;j<J;j++) cr.push([idx(i,j),idx(i,j+1),'M']); } }
+    for(let i=0;i<P;i++) cr.push([idx(i,0),idx(i+1,0),'B'],[idx(i,J),idx(i+1,J),'B']);
+    for(let j=0;j<J;j++) cr.push([idx(0,j),idx(0,j+1),'B'],[idx(P,j),idx(P,j+1),'B']);
+    return {v3,v2,tris,creases:cr,meta:{dev:false,approx:true}};
+  }};
+
+/* 15. CURVED MIURA VAULT — Miura-ori wrapped onto a barrel-vault cross-section (deployable canopy) */
+GEN.mvault={ label:'Curved Miura vault', dev:true,
+  desc:'A Miura-ori sheet wrapped onto a curved cross-section. It keeps the single-DOF auxetic fold — collapsing to a flat stack — and deploys into a barrel-vault tunnel or canopy. The cut pattern is the standard developable Miura net; curvature is added in the deployed embedding.',
+  meta:[['developable','dev'],['rigid-fold',''],['deployable',''],['vault','']],
+  params:[
+    {k:'nu',l:'cells (arch)',min:2,max:200,step:1,v:10},
+    {k:'nv',l:'cells (length)',min:1,max:200,step:1,v:5},
+    {k:'a',l:'side a',min:5,max:200,step:1,v:20,u:'mm'},
+    {k:'b',l:'side b',min:5,max:200,step:1,v:26,u:'mm'},
+    {k:'g',l:'angle γ',min:20,max:80,step:1,v:55,u:'°'},
+    {k:'arc',l:'sweep',min:30,max:350,step:1,v:180,u:'°'}],
+  build(p,t){
+    const g=d2r(p.g), th=t*g*0.998;
+    const lx=p.a*cos(th), lz=p.a*sin(th), mx=p.b*cos(g)/cos(th);
+    const mx0=p.b*cos(g), my0=p.b*sin(g), my=sqrt(Math.max(0,p.b*p.b-mx*mx)), NX=p.nu, NY=p.nv;
+    const idx=(i,j)=>i*(NY+1)+j, X=[],Y=[],Z=[],v2=[]; let xmax=1e-9;
+    for(let i=0;i<=NX;i++)for(let j=0;j<=NY;j++){ const x=i*lx+(j%2)*mx, y=(i%2)*lz, z=j*my;
+      X.push(x); Y.push(y); Z.push(z); if(x>xmax)xmax=x; v2.push([i*p.a+(j%2)*mx0, j*my0]); }
+    const arc=d2r(p.arc), R=xmax/Math.max(arc,1e-3), v3=[];
+    for(let k=0;k<X.length;k++){ const phi=-arc/2+arc*(X[k]/xmax), rad=R+Y[k];
+      v3.push([rad*Math.sin(phi), rad*Math.cos(phi), Z[k]]); }
+    const tris=gridTris(NX,NY,idx), cr=[];
+    for(let i=0;i<=NX;i++)for(let j=0;j<NY;j++){ const tp=((i+j)%2===0)?'M':'V'; cr.push([idx(i,j),idx(i,j+1),(i===0||i===NX)?'B':tp]); }
+    for(let i=0;i<NX;i++)for(let j=0;j<=NY;j++){ const tp=(j%2===0)?'M':'V'; cr.push([idx(i,j),idx(i+1,j),(j===0||j===NY)?'B':tp]); }
+    return {v3,v2,tris,creases:cr,meta:{dev:true,approx:true}};
+  }};
+
+/* 16. WATERBOMB TUBE — waterbomb tessellation wrapped into a radially-expanding cylinder (magic ball) */
+GEN.wbtube={ label:'Waterbomb tube · magic ball', dev:true,
+  desc:'The waterbomb tessellation wrapped into a cylinder — the classic "magic ball." Each waterbomb base lets a ring bulge outward or pinch to a waist, so the tube expands radially and collapses to a tight column. Cut as a flat strip and glued along one seam.',
+  meta:[['developable','dev'],['flat-fold',''],['deployable',''],['radial',''],['tube','']],
+  params:[
+    {k:'nu',l:'units (around)',min:3,max:200,step:1,v:6},
+    {k:'nv',l:'units (tall)',min:1,max:200,step:1,v:5},
+    {k:'u',l:'cell size',min:8,max:200,step:1,v:20,u:'mm'},
+    {k:'bulge',l:'bulge',min:0,max:1.4,step:0.05,v:0.6},
+    {k:'waist',l:'waist',min:0,max:1,step:0.05,v:0.3}],
+  build(p,t){
+    const NX=2*p.nu, NY=2*p.nv, h=p.u/2, amp=p.bulge*p.u*t, waist=p.waist*p.u*t, R0=NX*h/TAU;
+    const idx=(i,j)=>i*(NY+1)+j, v3=[],v2=[];
+    for(let i=0;i<=NX;i++)for(let j=0;j<=NY;j++){ const oi=i%2,oj=j%2; let pr;
+      if(oi&&oj)pr=amp; else if(!oi&&!oj)pr=-waist; else pr=-amp*0.25;
+      const rad=Math.max(2,R0+pr), th=TAU*i/NX;
+      v3.push([rad*cos(th), j*h, rad*sin(th)]); v2.push([i*h,j*h]); }
+    const tris=gridTris(NX,NY,idx), cr=[];
+    for(let i=0;i<NX;i+=2)for(let j=0;j<NY;j+=2){ const c=idx(i+1,j+1);
+      cr.push([idx(i,j),c,'M'],[idx(i+2,j),c,'M'],[idx(i+2,j+2),c,'M'],[idx(i,j+2),c,'M']);
+      cr.push([idx(i+1,j),c,'V'],[idx(i+1,j+2),c,'V'],[idx(i,j+1),c,'V'],[idx(i+2,j+1),c,'V']); }
+    for(let i=0;i<NX;i++)cr.push([idx(i,0),idx(i+1,0),'B'],[idx(i,NY),idx(i+1,NY),'B']);
+    for(let j=0;j<NY;j++)cr.push([idx(0,j),idx(0,j+1),'B'],[idx(NX,j),idx(NX,j+1),'B']);
+    return {v3,v2,tris,creases:cr,meta:{dev:true,approx:true}};
+  }};
+
+/* 17. RADIAL DOME — meridian gores + concentric ring folds; flat fan pleats up into a dome */
+GEN.rdome={ label:'Radial dome · folding gores', dev:false,
+  desc:'A radial-gore dome: meridian gores and concentric ring folds let a flat fan pleat up into a dome and collapse flat again. The cut pattern is a flat radial fan; the double curvature is gathered into the ring folds (approximate assembly).',
+  meta:[['foldable',''],['deployable',''],['gore / radial',''],['dome','']],
+  params:[
+    {k:'ns',l:'gores',min:4,max:200,step:1,v:12},
+    {k:'kr',l:'rings',min:2,max:200,step:1,v:6},
+    {k:'R',l:'base radius',min:20,max:200,step:1,v:80,u:'mm'},
+    {k:'dome',l:'cap angle',min:20,max:150,step:1,v:80,u:'°'}],
+  build(p,t){
+    const NS=p.ns|0, KR=Math.max(2,p.kr|0), phimax=d2r(clamp(p.dome,5,159));
+    const Rs=p.R/Math.max(0.05,sin(Math.min(phimax,PI/2))), cpm=cos(phimax);
+    const idx=(s,k)=>s*(KR+1)+k, v3=[],v2=[];
+    for(let s=0;s<=NS;s++){ const th=TAU*s/NS, ct=cos(th), st=sin(th);
+      for(let k=0;k<=KR;k++){ const ph=phimax*k/KR, rho=Rs*sin(ph), yk=Rs*(cos(ph)-cpm), mk=Rs*ph;
+        const r=mk*(1-t)+rho*t, h=yk*t; v3.push([r*ct,h,r*st]); v2.push([mk*ct,mk*st]); } }
+    const tris=[];
+    for(let s=0;s<NS;s++){ tris.push([idx(s,0),idx(s,1),idx(s+1,1)]);
+      for(let k=1;k<KR;k++){ const a=idx(s,k),b=idx(s+1,k),c=idx(s+1,k+1),d=idx(s,k+1); tris.push([a,b,c],[a,c,d]); } }
+    const cr=[];
+    for(let s=1;s<NS;s++){ cr.push([idx(s,0),idx(s,1),'M']); for(let k=1;k<KR;k++) cr.push([idx(s,k),idx(s,k+1),'M']); }
+    for(let k=1;k<KR;k++){ const tp=(k%2===0)?'M':'V'; for(let s=0;s<NS;s++) cr.push([idx(s,k),idx(s+1,k),tp]); }
+    for(let s=0;s<NS;s++) cr.push([idx(s,KR),idx(s+1,KR),'B']);
+    for(let k=0;k<KR;k++) cr.push([idx(0,k),idx(0,k+1),'B']);
+    return {v3,v2,tris,creases:cr,meta:{dev:false,approx:true}};
+  }};
+
+/* 18. PLEATED CONE — radial M/V pleats apex-to-rim; flat sector opens into a fluted cone (tepee/yurt) */
+GEN.pcone={ label:'Pleated cone · fluted tent', dev:true,
+  desc:'A radially-pleated cone — the tepee / yurt shelter. Alternating mountain and valley folds run apex to rim, so a flat sector pleats up into a fluted cone and collapses flat. A cone is developable, so the cut pattern is a true flat sector; an optional twist gives the Kresling spiral.',
+  meta:[['developable','dev'],['deployable',''],['pleated',''],['cone / tent','']],
+  params:[
+    {k:'pleats',l:'pleats',min:3,max:200,step:1,v:8},
+    {k:'rings',l:'rings',min:1,max:200,step:1,v:4},
+    {k:'R',l:'base radius',min:20,max:200,step:1,v:70,u:'mm'},
+    {k:'H',l:'height',min:10,max:200,step:1,v:90,u:'mm'},
+    {k:'flute',l:'flute depth',min:0,max:0.9,step:0.05,v:0.4},
+    {k:'twist',l:'twist',min:0,max:360,step:5,v:0,u:'°'}],
+  build(p,t){
+    const N=Math.max(3,p.pleats|0), NS=2*N, KR=Math.max(1,p.rings|0), R=p.R, H=p.H, flute=p.flute, tw=d2r(p.twist||0);
+    const rho=[],yk=[],amp=[],Lk=[0];
+    for(let k=0;k<=KR;k++){ const f=k/KR; rho.push(R*f); yk.push(H*(1-f)); amp.push(flute*R*f); }
+    for(let k=1;k<=KR;k++) Lk.push(Lk[k-1]+Math.hypot(rho[k]-rho[k-1], yk[k]-yk[k-1]));
+    const Ro=rho[KR]+amp[KR], Ri=Math.max(0,rho[KR]-amp[KR]), dps=PI/N;
+    const e=sqrt(Ro*Ro+Ri*Ri-2*Ro*Ri*cos(dps)), perim=NS*e, Theta=perim/Math.max(1e-6,Lk[KR]);
+    const idx=(s,k)=>s*(KR+1)+k, v3=[],v2=[];
+    for(let s=0;s<=NS;s++){ const phiF=Theta*s/NS, thD=PI*s/N, sgn=(s%2===0)?1:-1;
+      for(let k=0;k<=KR;k++){ const rD=rho[k]+amp[k]*sgn, ang=phiF*(1-t)+(thD+tw*(k/KR))*t, rad=Lk[k]*(1-t)+rD*t, h=yk[k]*t;
+        v3.push([rad*cos(ang), h, rad*sin(ang)]); v2.push([Lk[k]*cos(phiF), Lk[k]*sin(phiF)]); } }
+    const tris=[];
+    for(let s=0;s<NS;s++){ tris.push([idx(s,0),idx(s,1),idx(s+1,1)]);
+      for(let k=1;k<KR;k++){ const a=idx(s,k),b=idx(s+1,k),c=idx(s+1,k+1),d=idx(s,k+1); tris.push([a,b,c],[a,c,d]); } }
+    const cr=[];
+    for(let s=1;s<NS;s++){ const tp=(s%2===0)?'M':'V'; for(let k=0;k<KR;k++) cr.push([idx(s,k),idx(s,k+1),tp]); }
+    for(let s=0;s<NS;s++) cr.push([idx(s,KR),idx(s+1,KR),'B']);
+    for(let k=0;k<KR;k++) cr.push([idx(0,k),idx(0,k+1),'B'],[idx(NS,k),idx(NS,k+1),'B']);
+    return {v3,v2,tris,creases:cr,meta:{dev:true,approx:true}};
+  }};
+
+const ORDER=['miura','mvault','accordion','yoshimura','kresling','waterbomb','wbtube','rdome','pcone','resch','eggbox','hypar','tmp','twist','diagonal','flasher','roof','frame'];
+/* ============================== 3D VIEWPORT ============================== */
+const cv=document.getElementById('cv');
+const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,alpha:true,preserveDrawingBuffer:true});
+renderer.setPixelRatio(Math.min(2,devicePixelRatio));
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(45,1,0.1,8000);
+scene.add(new THREE.AmbientLight(0x4a546e,0.9));
+const d1=new THREE.DirectionalLight(0xffffff,0.85); d1.position.set(1,1.2,0.7); scene.add(d1);
+const d2=new THREE.DirectionalLight(0xd4af37,0.45); d2.position.set(-0.7,0.5,-1); scene.add(d2);
+const pivot=new THREE.Group(); scene.add(pivot);
+const group=new THREE.Group(); pivot.add(group);
+let tc=null, baseDims=[1,1,1];
+const gridGroup=new THREE.Group(); scene.add(gridGroup);
+{ const grid=new THREE.GridHelper(400,40,0x2a3658,0x18223c); grid.position.y=-0.01; gridGroup.add(grid);
+  const ax=new THREE.AxesHelper(60); gridGroup.add(ax); }
+
+const faceMat=new THREE.MeshStandardMaterial({color:0x20305a,metalness:0.18,roughness:0.52,
+  flatShading:true,side:THREE.DoubleSide,emissive:0x0a1124,polygonOffset:true,polygonOffsetFactor:1,polygonOffsetUnits:1});
+const matM=new THREE.LineBasicMaterial({color:0xe0653f});
+const matV=new THREE.LineDashedMaterial({color:0x6f9bf2,dashSize:2,gapSize:1.4});
+const matB=new THREE.LineBasicMaterial({color:0x5a667e});
+const matBgray=new THREE.LineBasicMaterial({color:0x5a667e});
+const matWire=new THREE.LineBasicMaterial({color:0x33406a,transparent:true,opacity:0.5});
+const matGhost=new THREE.LineBasicMaterial({color:0x39456e,transparent:true,opacity:0.4});
+const matGhost2=new THREE.LineBasicMaterial({color:0x3a486e});
+
+/* ---- custom orbit controls (orbit / zoom / pan) ---- */
+const ctl={theta:0.9,phi:1.05,radius:240,target:new THREE.Vector3(0,0,0)};
+function applyCam(){
+  const r=ctl.radius, sp=Math.sin(ctl.phi);
+  camera.position.set(ctl.target.x+r*sp*Math.sin(ctl.theta), ctl.target.y+r*Math.cos(ctl.phi), ctl.target.z+r*sp*Math.cos(ctl.theta));
+  camera.lookAt(ctl.target);
+}
+(function bindControls(){
+  let dragging=0,px=0,py=0;
+  cv.addEventListener('mousedown',e=>{ if(tc&&tc.axis)return; dragging=(e.button===2||e.shiftKey)?2:1;px=e.clientX;py=e.clientY;e.preventDefault();});
+  window.addEventListener('mouseup',()=>dragging=0);
+  window.addEventListener('mousemove',e=>{ if(window._gizmoActive)return; if(!dragging)return; const dx=e.clientX-px,dy=e.clientY-py;px=e.clientX;py=e.clientY;
+    if(dragging===1){ ctl.theta-=dx*0.008; ctl.phi=clamp(ctl.phi-dy*0.008,0.08,PI-0.08); }
+    else{ const pan=ctl.radius*0.0016; const right=new THREE.Vector3().subVectors(camera.position,ctl.target).cross(camera.up).normalize();
+      const up=camera.up.clone(); ctl.target.addScaledVector(right,-dx*pan); ctl.target.addScaledVector(up,dy*pan); }
+    applyCam(); });
+  cv.addEventListener('wheel',e=>{ ctl.radius=clamp(ctl.radius*(1+Math.sign(e.deltaY)*0.1),5,6000); applyCam(); e.preventDefault();},{passive:false});
+  cv.addEventListener('contextmenu',e=>e.preventDefault());
+  // touch (1 finger orbit, 2 finger zoom/pan)
+  let lt=null;
+  cv.addEventListener('touchstart',e=>{lt=[...e.touches].map(t=>({x:t.clientX,y:t.clientY}));},{passive:false});
+  cv.addEventListener('touchmove',e=>{e.preventDefault(); const t=[...e.touches].map(t=>({x:t.clientX,y:t.clientY}));
+    if(t.length===1&&lt&&lt.length===1){ ctl.theta-=(t[0].x-lt[0].x)*0.008; ctl.phi=clamp(ctl.phi-(t[0].y-lt[0].y)*0.008,0.08,PI-0.08);}
+    else if(t.length===2&&lt&&lt.length===2){ const d0=Math.hypot(lt[0].x-lt[1].x,lt[0].y-lt[1].y),d1=Math.hypot(t[0].x-t[1].x,t[0].y-t[1].y);
+      if(d0>0)ctl.radius=clamp(ctl.radius*d0/d1,5,6000);} lt=t; applyCam();},{passive:false});
+})();
+
+/* ---- build the model into the scene ---- */
+let cur='miura', params={}, foldT=1, model=null;
+const flags={faces:true,creases:true,wire:false,ghost:false,spin:false,grid:true,page:false};
+
+function disposeGroup(g){ while(g.children.length){const c=g.children.pop(); if(c.geometry)c.geometry.dispose(); }}
+
+/* ====================== DEFORM · modifier stack ====================== */
+const deform={axis:'auto',twist:0,bend:0,taper:0,skew:0,stretch:0,spherify:0,waveAmp:0,waveLen:60};
+function applyDeform(V){ const d=deform;
+  if(!d.twist&&!d.bend&&!d.taper&&!d.skew&&!d.stretch&&!d.spherify&&!d.waveAmp) return;
+  let mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];
+  for(const v of V)for(let k=0;k<3;k++){ if(v[k]<mn[k])mn[k]=v[k]; if(v[k]>mx[k])mx[k]=v[k]; }
+  const c=[(mn[0]+mx[0])/2,(mn[1]+mx[1])/2,(mn[2]+mx[2])/2];
+  const sz=[mx[0]-mn[0]||1,mx[1]-mn[1]||1,mx[2]-mn[2]||1];
+  const ax=d.axis==='x'?0:d.axis==='y'?1:d.axis==='z'?2:(sz[0]>=sz[1]&&sz[0]>=sz[2]?0:(sz[1]>=sz[2]?1:2));
+  const b=(ax+1)%3, e=(ax+2)%3, halfA=0.5*sz[ax], Rsph=0.5*Math.max(sz[0],sz[1],sz[2]);
+  const tw=d.twist*PI/180, sk=Math.tan((d.skew||0)*PI/180), bd=d.bend*PI/180;
+  const Rb=Math.abs(bd)>1e-4?sz[ax]/bd:0, waveK=d.waveLen>0?TAU/d.waveLen:0;
+  for(const v of V){
+    if(d.stretch){ const s=1+d.stretch, pr=1/Math.sqrt(Math.max(0.05,s)); v[ax]=c[ax]+(v[ax]-c[ax])*s; v[b]=c[b]+(v[b]-c[b])*pr; v[e]=c[e]+(v[e]-c[e])*pr; }
+    if(d.taper){ const f=Math.max(0.02,1+d.taper*((v[ax]-c[ax])/halfA)); v[b]=c[b]+(v[b]-c[b])*f; v[e]=c[e]+(v[e]-c[e])*f; }
+    if(tw){ const a=tw*((v[ax]-c[ax])/halfA), ca=Math.cos(a), sa=Math.sin(a), rb=v[b]-c[b], re=v[e]-c[e]; v[b]=c[b]+rb*ca-re*sa; v[e]=c[e]+rb*sa+re*ca; }
+    if(sk){ v[b]+=sk*(v[ax]-c[ax]); }
+    if(d.waveAmp&&waveK){ v[b]+=d.waveAmp*Math.sin(waveK*(v[ax]-mn[ax])); }
+    if(Rb){ const s=v[ax]-c[ax], a=s/Rb, r=Rb-(v[b]-c[b]); v[ax]=c[ax]+r*Math.sin(a); v[b]=c[b]+(Rb-r*Math.cos(a)); }
+    if(d.spherify){ const dx=v[0]-c[0],dy=v[1]-c[1],dz=v[2]-c[2], len=Math.hypot(dx,dy,dz)||1, t=d.spherify;
+      v[0]+=((c[0]+dx/len*Rsph)-v[0])*t; v[1]+=((c[1]+dy/len*Rsph)-v[1])*t; v[2]+=((c[2]+dz/len*Rsph)-v[2])*t; } }
+}
+const DEFORMERS=[
+  {k:'twist',l:'Twist',min:-360,max:360,step:1,u:'°'},
+  {k:'bend',l:'Bend',min:-170,max:170,step:1,u:'°'},
+  {k:'taper',l:'Taper',min:-1,max:1,step:0.02},
+  {k:'skew',l:'Skew',min:-70,max:70,step:1,u:'°'},
+  {k:'stretch',l:'Stretch',min:-0.8,max:3,step:0.05},
+  {k:'spherify',l:'Spherify',min:0,max:1,step:0.02},
+  {k:'waveAmp',l:'Wave amp',min:0,max:60,step:0.5,u:'mm'},
+  {k:'waveLen',l:'Wave length',min:5,max:200,step:1,u:'mm'}
+];
+function renderDeform(){ const box=document.getElementById('deformBox'); box.innerHTML='';
+  DEFORMERS.forEach(p=>{ const dec=(String(p.step).split('.')[1]||'').length, fmt=v=>dec?(+v).toFixed(dec):String(Math.round(+v));
+    const d=document.createElement('div'); d.className='ctrl';
+    d.innerHTML=`<label>${p.l}<span class="punit">${p.u||''}</span></label><div class="prow"><input class="pnum" type="number" min="${p.min}" max="${p.max}" step="${p.step}" value="${fmt(deform[p.k])}"><input class="prange" type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${deform[p.k]}"></div>`;
+    const num=d.querySelector('.pnum'), rng=d.querySelector('.prange');
+    const apply=v=>{ let x=+v; if(!isFinite(x))x=0; x=Math.min(p.max,Math.max(p.min,x)); deform[p.k]=x; if(document.activeElement!==num)num.value=fmt(x); rng.value=x; scheduleBuild(false); };
+    num.oninput=()=>apply(num.value); rng.oninput=()=>apply(rng.value);
+    box.appendChild(d); spinner(num); });
+}
+document.getElementById('dfAxis').onchange=e=>{ deform.axis=e.target.value; scheduleBuild(false); };
+document.getElementById('dfReset').onclick=()=>{ DEFORMERS.forEach(p=>deform[p.k]=(p.k==='waveLen'?60:0)); deform.axis='auto'; document.getElementById('dfAxis').value='auto'; renderDeform(); scheduleBuild(false); };
+renderDeform();
+
+const TUBES=new Set(['kresling','yoshimura','tmp','diagonal']);
+let capEnds=false;
+function capTube(m, R){ const V=m.v3, T=m.tris, F=m.v2, C=m.creases, n=params.n|0;
+  if(n<3 || V.length%n!==0 || V.length!==F.length) return; const rings=V.length/n; if(rings<2) return;
+  let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9; for(const p of F){ if(p[0]<mnx)mnx=p[0]; if(p[1]<mny)mny=p[1]; if(p[0]>mxx)mxx=p[0]; if(p[1]>mxy)mxy=p[1]; }
+  const Rc=R>0?R:Math.max(1,(mxx-mnx)/6), gap=Math.max(Rc*0.5,(mxx-mnx)*0.04), cyp=(mny+mxy)/2;
+  const cx0=mxx+gap+Rc, cx1=cx0+2*Rc+gap;
+  function makeCap(start,rev,cxp){
+    let cx=0,cy=0,cz=0; for(let k=0;k<n;k++){ const v=V[start+k]; cx+=v[0]; cy+=v[1]; cz+=v[2]; }
+    const ci=V.length; V.push([cx/n,cy/n,cz/n]); F.push([cxp,cyp]);          // shared cap centre (3D end + flat centre)
+    for(let k=0;k<n;k++){ const v=V[start+k]; V.push([v[0],v[1],v[2]]);       // 3D: duplicate of the end-ring vertex
+      const a=TAU*k/n-PI/2; F.push([cxp+Rc*Math.cos(a),cyp+Rc*Math.sin(a)]); }// 2D: vertex of the flat cut-out n-gon
+    for(let k=0;k<n;k++){ const a=ci+1+k, b=ci+1+((k+1)%n); T.push(rev?[ci,b,a]:[ci,a,b]); C.push([a,b,'B']); }
+  }
+  makeCap(0,false,cx0); makeCap((rings-1)*n,true,cx1);
+}
+function buildModel(refit){
+  model=GEN[cur].build(params,foldT);
+  let capR=0;
+  if(capEnds && TUBES.has(cur)){ const cn=params.n|0, V0=model.v3;
+    if(cn>=3 && V0.length>=cn){ let cx=0,cz=0; for(let k=0;k<cn;k++){ cx+=V0[k][0]; cz+=V0[k][2]; } cx/=cn; cz/=cn;
+      for(let k=0;k<cn;k++){ capR+=Math.hypot(V0[k][0]-cx,V0[k][2]-cz); } capR/=cn; } }
+  applyDeform(model.v3);
+  if(capEnds && TUBES.has(cur)) capTube(model, capR);
+  const V=model.v3;
+  // center
+  let mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];
+  for(const v of V)for(let k=0;k<3;k++){mn[k]=Math.min(mn[k],v[k]);mx[k]=Math.max(mx[k],v[k]);}
+  const c=[(mn[0]+mx[0])/2,(mn[1]+mx[1])/2,(mn[2]+mx[2])/2];
+  const size=Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2])||10;
+  disposeGroup(group);
+  // faces
+  if(flags.faces){
+    const pos=new Float32Array(V.length*3);
+    for(let i=0;i<V.length;i++){pos[i*3]=V[i][0]-c[0];pos[i*3+1]=V[i][1]-c[1];pos[i*3+2]=V[i][2]-c[2];}
+    const geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+    const idx=[]; for(const f of model.tris)idx.push(f[0],f[1],f[2]); geo.setIndex(idx); geo.computeVertexNormals();
+    group.add(new THREE.Mesh(geo,faceMat));
+  }
+  // wireframe
+  if(flags.wire){
+    const pos=[]; for(const f of model.tris){const e=[[f[0],f[1]],[f[1],f[2]],[f[2],f[0]]];
+      for(const [a,b] of e){pos.push(V[a][0]-c[0],V[a][1]-c[1],V[a][2]-c[2],V[b][0]-c[0],V[b][1]-c[1],V[b][2]-c[2]);}}
+    const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+    group.add(new THREE.LineSegments(g,matWire));
+  }
+  // creases by type
+  if(flags.creases){
+    const buckets={M:[],V:[],B:[]};
+    for(const [a,b,tp] of model.creases){ const arr=buckets[tp]||buckets.B;
+      arr.push(V[a][0]-c[0],V[a][1]-c[1],V[a][2]-c[2],V[b][0]-c[0],V[b][1]-c[1],V[b][2]-c[2]); }
+    const dash=Math.max(0.6,size/55);
+    if(buckets.M.length){const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(buckets.M,3));group.add(new THREE.LineSegments(g,matM));}
+    if(buckets.V.length){const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(buckets.V,3));
+      const ls=new THREE.LineSegments(g,matV); ls.computeLineDistances(); matV.dashSize=dash; matV.gapSize=dash*0.7; group.add(ls);}
+    if(buckets.B.length){const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(buckets.B,3));group.add(new THREE.LineSegments(g,matBgray));}
+  }
+  // ghost flat overlay (the unfolded pattern, laid at base)
+  if(flags.ghost){
+    const F=model.v2; let f2mn=[1e9,1e9],f2mx=[-1e9,-1e9];
+    for(const v of F){f2mn[0]=Math.min(f2mn[0],v[0]);f2mn[1]=Math.min(f2mn[1],v[1]);f2mx[0]=Math.max(f2mx[0],v[0]);f2mx[1]=Math.max(f2mx[1],v[1]);}
+    const fc=[(f2mn[0]+f2mx[0])/2,(f2mn[1]+f2mx[1])/2], yb=mn[1]-c[1]-2;
+    const pos=[]; for(const [a,b] of model.creases.map(c=>[c[0],c[1]])){
+      pos.push(F[a][0]-fc[0],yb,F[a][1]-fc[1], F[b][0]-fc[0],yb,F[b][1]-fc[1]); }
+    const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+    group.add(new THREE.LineSegments(g,matGhost2));
+  }
+  gridGroup.visible=flags.grid;
+  baseDims=[mx[0]-mn[0]||1,mx[1]-mn[1]||1,mx[2]-mn[2]||1];
+  const sMax=Math.max(group.scale.x,group.scale.y,group.scale.z)||1;
+  if(refit){ ctl.target.set(0,0,0); ctl.radius=size*2.3*sMax; applyCam(); }
+  updateHUD(size,mx,mn);
+  renderPreview(); if(typeof syncTF==='function') syncTF();
+}
+/* ============================== HUD + 2D PREVIEW ============================== */
+function updateHUD(size,mx,mn){
+  const nf=model.tris.length, nv=model.v3.length;
+  let f2mn=[1e9,1e9],f2mx=[-1e9,-1e9];
+  for(const v of model.v2){f2mn[0]=Math.min(f2mn[0],v[0]);f2mn[1]=Math.min(f2mn[1],v[1]);f2mx[0]=Math.max(f2mx[0],v[0]);f2mx[1]=Math.max(f2mx[1],v[1]);}
+  const fw=(f2mx[0]-f2mn[0]).toFixed(0), fh=(f2mx[1]-f2mn[1]).toFixed(0);
+  const H=(mx[1]-mn[1]).toFixed(1), W=(mx[0]-mn[0]).toFixed(1), D=(mx[2]-mn[2]).toFixed(1);
+  document.getElementById('hud').innerHTML=
+    `<div><span>pattern</span><b>${GEN[cur].label}</b></div>`+
+    `<div><span>fold</span><b>${(foldT*100).toFixed(0)}%</b></div>`+
+    `<div><span>folded W×H×D</span><b>${W}·${H}·${D}</b></div>`+
+    `<div><span>flat sheet</span><b>${fw}×${fh} mm</b></div>`+
+    `<div><span>vertices</span><b>${nv}</b></div>`+
+    `<div><span>faces</span><b>${nf}</b></div>`;
+  document.getElementById('readout').innerHTML=
+    `Flat fabrication sheet: <b style="color:var(--gold-soft)">${fw} × ${fh} mm</b>. `+
+    `Crease lines tagged mountain / valley / cut for the DXF + SVG layers.`+
+    (model.meta&&model.meta.nondev?` <b style="color:var(--mountain)">Non-developable</b> — the flat layout is the formed-panel footprint.`:'')+
+    (model.meta&&model.meta.approx?` 3D fold is a faithful parametric model; the 2D crease sheet is exact.`:'');
+}
+
+function creaseColor(tp){return tp==='M'?'#e0653f':tp==='V'?'#6f9bf2':'#5a667e';}
+function renderPreview(){
+  const svg=document.getElementById('prev');
+  if(flags.page){ const sh=buildSheetSVG({screen:true});
+    svg.setAttribute('viewBox',`0 0 ${sh.pw} ${sh.ph}`); svg.innerHTML=sh.inner;
+    document.getElementById('prevcap').textContent=`${paper.size}${paper.land?' landscape':' portrait'} · ${paper.actual?'actual 1:1':'fit '+(sh.s*100).toFixed(0)+'%'} · prints ${sh.dw.toFixed(0)} × ${sh.dh.toFixed(0)} mm${sh.overflow?' · ⚠ exceeds page':''}`;
+    updatePaperInfo(sh); return; }
+  const F=model.v2, C=model.creases;
+  let mn=[1e9,1e9],mx=[-1e9,-1e9];
+  for(const v of F){mn[0]=Math.min(mn[0],v[0]);mn[1]=Math.min(mn[1],v[1]);mx[0]=Math.max(mx[0],v[0]);mx[1]=Math.max(mx[1],v[1]);}
+  const w=mx[0]-mn[0]||1,h=mx[1]-mn[1]||1, pad=Math.max(w,h)*0.04;
+  svg.setAttribute('viewBox',`${mn[0]-pad} ${mn[1]-pad} ${w+2*pad} ${h+2*pad}`);
+  const sw=Math.max(w,h)/240;
+  let s='';
+  for(const [a,b,tp] of C){ const dash=tp==='V'?`stroke-dasharray="${sw*4} ${sw*3}"`:'';
+    s+=`<line x1="${F[a][0]}" y1="${F[a][1]}" x2="${F[b][0]}" y2="${F[b][1]}" stroke="${creaseColor(tp)}" stroke-width="${tp==='B'?sw*1.4:sw*1.1}" ${dash} stroke-linecap="round"/>`; }
+  svg.innerHTML=s;
+  document.getElementById('prevcap').textContent=`flat sheet · ${(w).toFixed(0)} × ${(h).toFixed(0)} mm · ${C.length} crease segments`;
+}
+
+/* ============================== EXPORT ============================== */
+function dl(name,text,mime){ const b=new Blob([text],{type:mime||'text/plain'}); const u=URL.createObjectURL(b);
+  const a=document.createElement('a'); a.href=u; a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(u),1500); }
+const fname=ext=>`ORU_${cur}_${ext}`;
+
+function exportSTL(){
+  const V=model.v3; let s='solid ORU_'+cur+'\n';
+  for(const f of model.tris){ const a=V[f[0]],b=V[f[1]],c=V[f[2]];
+    const ux=b[0]-a[0],uy=b[1]-a[1],uz=b[2]-a[2], vx=c[0]-a[0],vy=c[1]-a[1],vz=c[2]-a[2];
+    let nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx; const L=Math.hypot(nx,ny,nz)||1; nx/=L;ny/=L;nz/=L;
+    s+=`facet normal ${nx} ${ny} ${nz}\n outer loop\n`;
+    s+=`  vertex ${a[0]} ${a[1]} ${a[2]}\n  vertex ${b[0]} ${b[1]} ${b[2]}\n  vertex ${c[0]} ${c[1]} ${c[2]}\n`;
+    s+=` endloop\nendfacet\n`; }
+  s+='endsolid ORU_'+cur+'\n'; dl(fname('3D.stl'),s,'model/stl');
+}
+function exportOBJ(){
+  const V=model.v3; let s=`# ORU ${GEN[cur].label} — folded mesh\n`;
+  for(const v of V)s+=`v ${v[0]} ${v[1]} ${v[2]}\n`;
+  for(const f of model.tris)s+=`f ${f[0]+1} ${f[1]+1} ${f[2]+1}\n`;
+  dl(fname('3D.obj'),s,'text/plain');
+}
+function exportSVG(){ const sh=buildSheetSVG({screen:false});
+  const svg=`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${sh.pw}mm" height="${sh.ph}mm" viewBox="0 0 ${sh.pw} ${sh.ph}">\n<!-- ORU ${GEN[cur].label} unfolded crease pattern on ${paper.size}${paper.land?' landscape':' portrait'}. mountain=solid, valley=dashed, cut/border=grey. Units: mm. Scale ${paper.actual?'1:1':(sh.s*100).toFixed(0)+'%'}. -->\n${sh.inner}\n</svg>\n`;
+  dl(fname('sheet.svg'),svg,'image/svg+xml');
+}
+function exportDXF(){
+  const F=model.v2,C=model.creases;
+  const L=[];
+  const P=(c,v)=>{L.push(c);L.push(v);};
+  P(0,'SECTION');P(2,'TABLES');P(0,'TABLE');P(2,'LAYER');P(70,3);
+  const layer=(name,color)=>{P(0,'LAYER');P(2,name);P(70,0);P(62,color);P(6,name==='VALLEY'?'DASHED':'CONTINUOUS');};
+  layer('MOUNTAIN',1); layer('VALLEY',5); layer('CUT',7);
+  P(0,'ENDTAB');P(0,'ENDSEC');
+  P(0,'SECTION');P(2,'ENTITIES');
+  for(const [a,b,tp] of C){ const ly=tp==='M'?'MOUNTAIN':tp==='V'?'VALLEY':'CUT';
+    P(0,'LINE');P(8,ly);P(10,F[a][0].toFixed(4));P(20,F[a][1].toFixed(4));P(30,'0.0');
+    P(11,F[b][0].toFixed(4));P(21,F[b][1].toFixed(4));P(31,'0.0'); }
+  P(0,'ENDSEC');P(0,'EOF');
+  dl(fname('flat.dxf'),L.join('\n')+'\n','application/dxf');
+}
+function exportJSON(){
+  dl(fname('model.json'),JSON.stringify({app:'ORU',credit:'Developed by Dr. Samer El Sayary © All Rights Reserved',pattern:cur,label:GEN[cur].label,params,fold:foldT,
+    meta:model.meta,counts:{vertices:model.v3.length,faces:model.tris.length,creases:model.creases.length},
+    v3:model.v3,v2:model.v2,tris:model.tris,creases:model.creases},null,1),'application/json');
+}
+const EXPORT={stl:exportSTL,obj:exportOBJ,svg:exportSVG,dxf:exportDXF,json:exportJSON};
+
+/* ============================== UI WIRING ============================== */
+const tabsEl=document.getElementById('tabs');
+ORDER.forEach(k=>{ const o=document.createElement('option'); o.value=k; o.textContent=GEN[k].label; tabsEl.appendChild(o); });
+tabsEl.onchange=()=>selectPattern(tabsEl.value);
+
+function selectPattern(k){
+  cur=k; params={}; GEN[k].params.forEach(p=>params[p.k]=p.v);
+  tabsEl.value=k;
+  document.getElementById('capWrap').style.display=TUBES.has(k)?'block':'none';
+  document.getElementById('ptitle').textContent=GEN[k].label;
+  document.getElementById('pdesc').textContent=GEN[k].desc;
+  document.getElementById('pmeta').innerHTML=GEN[k].meta.map(m=>`<span class="${m[1]}">${m[0]}</span>`).join('');
+  renderParams();
+  foldT=document.getElementById('fold').value/1000;
+  buildModel(true);
+}
+function renderParams(){
+  const box=document.getElementById('params'); box.innerHTML='';
+  GEN[cur].params.forEach(p=>{
+    const d=document.createElement('div'); d.className='ctrl';
+    if(p.type==='choice'){
+      d.innerHTML=`<label>${p.l}</label><select class="pchoice">${p.opts.map(o=>`<option value="${o.v}">${o.t}</option>`).join('')}</select>`;
+      const sel=d.querySelector('select'); sel.value=params[p.k];
+      sel.onchange=()=>{ params[p.k]=sel.value; scheduleBuild(true); };
+      box.appendChild(d); return;
+    }
+    const dec=(String(p.step).split('.')[1]||'').length;
+    const fmt=v=> dec?(+v).toFixed(dec):String(Math.round(+v));
+    d.innerHTML=`<label>${p.l}<span class="punit">${p.u||''}</span></label>
+      <div class="prow">
+        <input class="pnum" type="number" min="${p.min}" max="${p.max}" step="${p.step}" value="${fmt(params[p.k])}">
+        <input class="prange" type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${params[p.k]}">
+      </div>`;
+    const num=d.querySelector('.pnum'), rng=d.querySelector('.prange');
+    const apply=v=>{ let x=(+v); if(!isFinite(x))x=p.min; x=Math.min(p.max,Math.max(p.min,x)); params[p.k]=x; if(document.activeElement!==num)num.value=fmt(x); rng.value=x; scheduleBuild(true); };
+    num.oninput=()=>apply(num.value); rng.oninput=()=>apply(rng.value);
+    box.appendChild(d); spinner(num);
+  });
+}
+document.getElementById('fold').oninput=e=>{ foldT=e.target.value/1000; scheduleBuild(false); };
+document.querySelectorAll('.sw').forEach(sw=>sw.onclick=()=>{ const t=sw.dataset.t; flags[t]=!flags[t];
+  sw.classList.toggle('on',flags[t]); buildModel(false); });
+document.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{ const fn=EXPORT[b.dataset.x]; if(fn)fn(); document.getElementById('exmenu').style.display='none'; });
+document.getElementById('exportbtn').onclick=e=>{ e.stopPropagation(); const m=document.getElementById('exmenu'); m.style.display=m.style.display==='block'?'none':'block'; };
+document.addEventListener('click',()=>document.getElementById('exmenu').style.display='none');
+document.getElementById('exmenu').onclick=e=>e.stopPropagation();
+document.getElementById('fitbtn').onclick=()=>buildModel(true);
+
+/* play / pause fold animation */
+let playing=false,dir=-1;
+const playBtn=document.getElementById('playbtn');
+playBtn.onclick=()=>{ playing=!playing; playBtn.innerHTML=playing?'&#10073;&#10073;':'&#9654;'; };
+function tickFold(){ if(playing){ let v=foldT+dir*0.012; if(v<=0){v=0;dir=1;} else if(v>=1){v=1;dir=-1;}
+  foldT=v; document.getElementById('fold').value=v*1000; buildModel(false); } }
+
+/* resize + loop */
+function resize(){ const r=cv.getBoundingClientRect(); if(r.width<2||r.height<2)return; renderer.setSize(r.width,r.height,false);
+  camera.aspect=r.width/r.height; camera.updateProjectionMatrix(); }
+window.addEventListener('resize',resize);
+let _lw=0,_lh=0;
+function animate(){ requestAnimationFrame(animate); const r=cv.getBoundingClientRect();
+  if(r.width&&(r.width!==_lw||r.height!==_lh)){_lw=r.width;_lh=r.height;resize();}
+  if(flags.spin)pivot.rotation.y+=0.005; tickFold(); renderer.render(scene,camera); }
+
+/* ====================== TRANSFORM · gizmo + numeric + dimensions ====================== */
+(function initGizmo(){
+  if(typeof THREE.TransformControls==='function'){
+    tc=new THREE.TransformControls(camera,renderer.domElement);
+    tc.setSize(0.85); tc.enabled=false; tc.visible=false;
+    tc.attach(group); scene.add(tc);
+    tc.addEventListener('dragging-changed',e=>{ window._gizmoActive=e.value; });
+    tc.addEventListener('objectChange',()=>syncTF());
+  } else { const na=document.getElementById('gizmoNA'); if(na)na.style.display='block'; }
+})();
+function setGizmo(mode){
+  document.querySelectorAll('.gmrow button').forEach(b=>b.classList.toggle('on',b.dataset.gm===mode));
+  if(!tc) return;
+  if(mode==='off'){ tc.enabled=false; tc.visible=false; } else { tc.setMode(mode); tc.enabled=true; tc.visible=true; }
+}
+function numv(id){ const v=parseFloat(document.getElementById(id).value); return isFinite(v)?v:0; }
+function applyTF(kind){
+  if(kind==='pos') group.position.set(numv('tf_pos_0'),numv('tf_pos_1'),numv('tf_pos_2'));
+  else if(kind==='rot') group.rotation.set(d2r(numv('tf_rot_0')),d2r(numv('tf_rot_1')),d2r(numv('tf_rot_2')));
+  else if(kind==='scl') group.scale.set(numv('tf_scl_0')||1,numv('tf_scl_1')||1,numv('tf_scl_2')||1);
+  else if(kind==='dim'){ const tL=numv('tf_dim_0'),tH=numv('tf_dim_1'),tW=numv('tf_dim_2');
+    if(tW>0)group.scale.x=tW/baseDims[0]; if(tH>0)group.scale.y=tH/baseDims[1]; if(tL>0)group.scale.z=tL/baseDims[2]; }
+  refreshDims();
+}
+function refreshDims(){ const s=(id,v)=>{const el=document.getElementById(id); if(el&&document.activeElement!==el)el.value=v;};
+  s('tf_dim_2',(baseDims[0]*group.scale.x).toFixed(1)); s('tf_dim_1',(baseDims[1]*group.scale.y).toFixed(1)); s('tf_dim_0',(baseDims[2]*group.scale.z).toFixed(1)); }
+function syncTF(){ const s=(id,v)=>{const el=document.getElementById(id); if(el&&document.activeElement!==el)el.value=v;};
+  s('tf_pos_0',group.position.x.toFixed(1)); s('tf_pos_1',group.position.y.toFixed(1)); s('tf_pos_2',group.position.z.toFixed(1));
+  s('tf_rot_0',(group.rotation.x*180/PI).toFixed(1)); s('tf_rot_1',(group.rotation.y*180/PI).toFixed(1)); s('tf_rot_2',(group.rotation.z*180/PI).toFixed(1));
+  s('tf_scl_0',group.scale.x.toFixed(2)); s('tf_scl_1',group.scale.y.toFixed(2)); s('tf_scl_2',group.scale.z.toFixed(2)); refreshDims(); }
+document.querySelectorAll('.gmrow button').forEach(b=>b.onclick=()=>setGizmo(b.dataset.gm));
+['pos','rot','scl'].forEach(k=>['0','1','2'].forEach(i=>{const el=document.getElementById('tf_'+k+'_'+i); if(el)el.oninput=()=>applyTF(k);}));
+['0','1','2'].forEach(i=>{const el=document.getElementById('tf_dim_'+i); if(el)el.oninput=()=>applyTF('dim');});
+document.getElementById('tfReset').onclick=()=>{ group.position.set(0,0,0); group.rotation.set(0,0,0); group.scale.set(1,1,1); syncTF(); };
+setGizmo('off');
+
+/* ====================== SCIENCE · background per pattern ====================== */
+const SCI={
+miura:`<h2>Miura-ori</h2>
+<p class="sgloss">The pattern a stiff thin film takes when buckling on a soft foundation; adapted by Koryo Miura (1985) to pack and deploy large membranes in one motion. A tessellation of identical parallelograms — horizontal zig-zag creases are uniformly mountain or valley, the longitudinal creases alternate. Developable, rigid-foldable, single degree of freedom, and auxetic: it shrinks in both directions at once.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Sides <b>a, b</b>, acute angle <b>γ</b>, fold angle <b>θ ∈ [0, γ]</b>, counts <b>nx · ny</b>. Width = nx · a · cosθ; depth = ny · b-projection; the corrugation Height per cell is H. Folding raises H while both footprint dimensions contract.</div>
+<div class="seqlab">Folded unit cell — Schenk &amp; Guest, PNAS 2013</div>
+<div class="seq">H = a · sinθ · sinγ</div>
+<div class="seq">S = b · cosθ · tanγ ⁄ √(1 + cos²θ · tan²γ)</div>
+<div class="seq">L = a · √(1 − sin²θ · sin²γ)</div>
+<div class="seq">V = b ⁄ √(1 + cos²θ · tan²γ)</div>
+<div class="seqlab">In-plane Poisson ratio (auxetic)</div>
+<div class="seq">ν = − tan²ξ ,   tanξ = cosθ · tanγ</div>
+<div class="ssrc"><b>Source.</b> M. Schenk &amp; S. D. Guest, Geometry of Miura-folded metamaterials, PNAS 110(9):3276 (2013). K. Miura, ISAS Rep. 618 (1985).</div>`,
+yoshimura:`<h2>Yoshimura · diamond</h2>
+<p class="sgloss">The diamond pattern a thin-walled tube buckles into under axial compression (Yoshimura, 1955). Isosceles triangles pair into diamonds; circumferential creases are valleys, the inclined creases mountains. It forms a faceted cylinder that is very stiff along its axis — useful for deployable booms and habitat shells.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Sides <b>n</b>, valley-crease length <b>L</b>, sector angle <b>β</b>, rings <b>m</b>, rhombus dihedral <b>θ</b>. Width = diameter 2R; Height = m · h. Deployment raises the per-module height h.</div>
+<div class="seqlab">Cylinder radius from the n-gon ring</div>
+<div class="seq">R = L ⁄ (2 · sin(π ⁄ n))</div>
+<div class="seqlab">Flat-foldable (stress-free) condition</div>
+<div class="seq">2 n β = π   →   β = π ⁄ (2 n)</div>
+<div class="seqlab">Per-module deployed height</div>
+<div class="seq">h = L · tanβ · sinθ</div>
+<div class="ssrc"><b>Source.</b> Yoshimura (1955); “Golden-Ratio Yoshimura,” arXiv:2405.18558 (2024).</div>`,
+kresling:`<h2>Kresling</h2>
+<p class="sgloss">The twisted tessellation a cylinder buckles into under torsion. Folding is coupled to a twist, and because the triangular facets must strain during the transition the cell is bistable — it snaps between an extended and a contracted state. Widely used for deployable, multistable mechanisms.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Sides <b>n</b>, radius <b>R</b>, angle ratio <b>λ</b>, segment height <b>H</b>, segments <b>m</b>. Width = 2R; total Height = m · H(φ), which falls as the twist φ grows along the folding path.</div>
+<div class="seqlab">Polygon geometry</div>
+<div class="seq">γ = π⁄2 − π⁄n ,   s = 2R · sin(π⁄n) ,   λ = θ_diag ⁄ γ</div>
+<div class="seqlab">Constant crease lengths during folding</div>
+<div class="seq">b² = H² + 2R²(1 − cosφ)</div>
+<div class="seq">a² = H² + 2R²(1 − cos(φ + 2π⁄n))</div>
+<div class="seqlab">Twist–height coupling (the folding path)</div>
+<div class="seq">H(φ) = √( b² − 2R²(1 − cosφ) )</div>
+<div class="ssrc"><b>Source.</b> Reid et al., arXiv:1609.01354; Kresling; Zang &amp; Misseroni et al., JMPS (2024).</div>`,
+waterbomb:`<h2>Waterbomb</h2>
+<p class="sgloss">The waterbomb base tiled into a surface — the “magic-ball.” Each square cell carries both diagonals (mountains) and the two mid-lines (valleys), meeting at high-valence vertices that give the sheet large local mobility. Closed into a ring it becomes a tube whose folding follows a discrete recursive map and can even oscillate along its length.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Cells <b>nx · ny</b>, cell size <b>u</b>, pop height. Width = nx · u, depth = ny · u; Height grows with the pop as the bombs open. The flat sheet is exactly nx·u × ny·u.</div>
+<div class="seqlab">Universal vertex laws (flat-foldability)</div>
+<div class="seq">Σ_odd αᵢ = Σ_even αᵢ = π   (Kawasaki)</div>
+<div class="seq">| M − V | = 2   (Maekawa)</div>
+<div class="seqlab">Tube kinematics</div>
+<div class="seq">x₍ₖ₊₁₎ = F(xₖ ; u, n)   — recursive ring map</div>
+<div class="ssrc"><b>Source.</b> T. Tachi, rigid-foldable tubes; conservative oscillating-tessellation studies.</div>`,
+resch:`<h2>Ron Resch</h2>
+<p class="sgloss">Ron Resch’s early-1970s triangular tessellation: two triangle grids — one at twice the scale, rotated 30° — leave triangular tiles separated by small star tucks. As the tucks fold the surrounding triangles stay planar and rigid, producing a sheet that is stiff yet accepts double curvature. An ancestor of folded-plate domes.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Divisions <b>N</b>, grid spacing <b>g</b>, tuck rise <b>τ</b>. Width and depth scale with N · g; Height is set by the tuck rise as the star tucks sink and the sheet curves.</div>
+<div class="seqlab">Symmetric rigid folding — closure at every interior vertex</div>
+<div class="seq">∏ₖ R(eₖ , ρₖ(τ)) = I</div>
+<p class="sgloss" style="margin-top:8px">These transcendental closure conditions are solved numerically per configuration: the rigid triangles are placed first, then the tuck geometry follows from the twist τ.</p>
+<div class="ssrc"><b>Source.</b> R. Resch (1970s); symmetric rigid-folding reconstructions (Bridges 2018).</div>`,
+eggbox:`<h2>Eggbox</h2>
+<p class="sgloss">A bidirectional array of pyramidal bumps. Unlike the folded patterns it has intrinsic curvature at every vertex, so it is formed rather than folded (non-developable). Its in-plane Poisson ratio is positive and its bending Poisson negative — the exact opposite of Miura, which is why Miura+eggbox hybrids span a tunable Poisson range.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Cells <b>nx · ny</b>, pitch <b>a</b>, bump height. Width = nx · a, depth = ny · a; Height = the bump amplitude H. The flat layout is the formed-panel footprint, not a foldable crease net.</div>
+<div class="seqlab">Apex height and in-plane periods (apex angle θ)</div>
+<div class="seq">H = b · sinγ · sinθ</div>
+<div class="seq">pₓ = 2a ,   p_y = 2b · sinγ · cosθ</div>
+<div class="seqlab">Poisson signs</div>
+<div class="seq">ν₍in-plane₎ &gt; 0 ,   ν₍bending₎ &lt; 0</div>
+<div class="ssrc"><b>Source.</b> Schenk &amp; Guest (2013); Pratapa, Liu &amp; Paulino, “Morph” (2019).</div>`,
+hypar:`<h2>Hyperbolic paraboloid (hypar)</h2>
+<p class="sgloss">Alternating mountain/valley concentric pleats that fold into a saddle. The pure concentric-pleat hypar is famously not rigidly foldable — paper only reaches the saddle by bending its facets — so practical models add a diagonal to each panel, making the surface triangulated and developable.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Rings <b>N</b>, pleat spacing <b>w</b> (ring k at radius k·w), curvature <b>c</b>. Width = depth = 2 · N · w; Height is the saddle rise, set by c and the fold.</div>
+<div class="seqlab">Idealized folded surface</div>
+<div class="seq">z(x, y) = c · (x² − y²)</div>
+<div class="seq">rₖ = k · w</div>
+<div class="ssrc"><b>Source.</b> E. Demaine et al., (Non)existence of pleated folds (2011); Bauhaus / Albers hypar lineage.</div>`,
+tmp:`<h2>Tachi-Miura polyhedron</h2>
+<p class="sgloss">A rigid-foldable bellows built by pairing two Miura sheets into a closed tube. It compresses flat along its axis with a single degree of freedom and packs predictably — a clean deployable structural tube.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Sides <b>n</b>, rings <b>m</b>, radius <b>R</b>, fold depth. Width = 2R; Height = the axial length, which collapses with the fold by the Miura length law.</div>
+<div class="seqlab">Axial compression (inherited from Miura)</div>
+<div class="seq">L(θ) ⁄ L₍flat₎ = √(1 − sin²θ · sin²γ)</div>
+<div class="ssrc"><b>Source.</b> T. Tachi &amp; K. Miura, cellular origami tubes (2011); Yasuda &amp; Yang.</div>`,
+twist:`<h2>Square twist</h2>
+<p class="sgloss">The twist gadget: a central square rotates in-plane while four surrounding flaps fold around it. It is flat-foldable yet cannot fold rigidly — the facets must bend, giving a snap-through and a bistable response. Tessellated, it underlies several mechanical-metamaterial switches.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Cells <b>nx · ny</b>, square edge <b>ℓ</b>, pleat <b>gap</b>, twist <b>ω</b>. Width = nx · (ℓ+gap), depth = ny · (ℓ+gap); Height grows with the lift as the squares twist from ω=0 to ω=π⁄2.</div>
+<div class="seqlab">Central-square corner trajectory (rotation by ω)</div>
+<div class="seq">[ x′ , y′ ] = [ cosω  −sinω ; sinω  cosω ] · [ x , y ]</div>
+<div class="ssrc"><b>Source.</b> J. Silverberg et al., Origami structures with a critical transition to bistability, Nature Materials (2015).</div>`,
+diagonal:`<h2>Diagonal · spiral</h2>
+<p class="sgloss">A cylinder buckling under torsion into parallelogram facets that fold along their diagonals. The tube does not collapse straight down — it rotates and folds (torsional collapse), which makes it a strong energy absorber. A close cousin of the Kresling cylinder.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Facets <b>n</b>, radius <b>R</b>, helix angle <b>η</b>, rings <b>m</b>. Width = 2R; Height = m · per-ring rise from the pitch P below. Twist accumulates into a spiral as it folds.</div>
+<div class="seqlab">Helix pitch and vertex placement</div>
+<div class="seq">P = 2 π R · tanη</div>
+<div class="seq">v = ( R·cosθ , R·sinθ , z ) ,   θ = 2πi⁄n + j · Δφ</div>
+<div class="ssrc"><b>Source.</b> Geometric / kinematic analyses, Symmetry 11(9):1101 (2019); Guest &amp; Pellegrino.</div>`,
+accordion:`<h2>Accordion · pleat</h2>
+<p class="sgloss">The simplest developable corrugation: a flat sheet scored with parallel alternating mountain and valley lines. It carries single (cylindrical) curvature only, folds rigidly with one degree of freedom, and collapses flat along the pleat axis. The building block beneath fans, bellows, radiator fins, and pleated façades.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Pleats <b>n</b>, sheet width <b>W</b>, pleat pitch <b>p</b>. Width = W (across the folds); folded Length = n · p · cosα; corrugation Height = p · sinα, where α is the fold angle.</div>
+<div class="seqlab">Fold kinematics (fold angle α)</div>
+<div class="seq">advance per pleat = p · cosα</div>
+<div class="seq">crest height = p · sinα</div>
+<div class="seq">compaction = cosα   (folded length ⁄ flat length)</div>
+<div class="ssrc"><b>Note.</b> A purely one-directional corrugation; orthogonal two-way pleats lock and will not fold — which is exactly why the Miura pattern shears its creases.</div>`,
+flasher:`<h2>Flasher · deployable spiral</h2>
+<p class="sgloss">A spiral-wrapping fold that packs a large flat membrane into a compact n-sided stack and blooms open in one motion. Concentric polygonal rings are linked by radial and diagonal (pinwheel) creases; as it closes, each ring twists by an accumulating angle and the disc wraps about its centre. The fold behind compactly stowed solar arrays and antennae.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Sides <b>n</b>, rings <b>m</b>, ring step <b>g</b>, flat pinwheel skew <b>δ</b>. Deployed Width = 2(m+1)·g across; stowed it collapses toward the central polygon while Height (stack depth) grows with the wrap.</div>
+<div class="seqlab">Flat ring geometry</div>
+<div class="seq">R_k = (k+1) · g ,   θ₍k,i₎ = 2πi⁄n + k·δ</div>
+<div class="seqlab">Wrapping motion (fold t)</div>
+<div class="seq">twist_k = t · k · (2π⁄n)</div>
+<div class="seq">R_k(t) = R_k · (1 − 0.55 t)</div>
+<div class="ssrc"><b>Source.</b> Zirbel, Lang, Magleby &amp; Howell, “Accommodating Thickness in Origami-Based Deployable Arrays,” J. Mech. Design 135(11) (2013); R. J. Lang, flasher pattern.</div>`,
+roof:`<h2>Faltwerk · folded-plate roof</h2>
+<p class="sgloss">A folded-plate roof from Heino Engel's structure systems: flat plates joined along straight fold lines into a corrugation that spans as a deep beam. Because every facet stays planar it is developable — it cuts and folds from flat sheet. The mode sets how the corrugation profile is modulated along the span.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Bays <b>n</b> (2n folds), span <b>W</b>, length <b>L</b>, fold depth <b>A</b>. Width = W; Length = L; Height = A (plus the centre rise in ridge-to-ridge). The fold slider grows the corrugation from a flat sheet to full depth.</div>
+<div class="seqlab">Modes</div>
+<div class="seq">Prismatic — constant profile, parallel ridges and valleys</div>
+<div class="seq">Sloped — ridge line cut by a plane:  A(z) = A · (1 − s·z⁄L)</div>
+<div class="seq">Ridge-to-ridge — elevated centre:  y += rise · (1 − (2z⁄L − 1)²)</div>
+<div class="seq">Ridge-to-valley — counter-running: profile phase shifts ½ wave over the length</div>
+<div class="ssrc"><b>Source.</b> H. Engel, Structure Systems / Tragsysteme — Folded Plate Structures (Faltwerke), pp. 224–227.</div>`,
+frame:`<h2>Faltwerk · folded frame & arch</h2>
+<p class="sgloss">Engel's linear folded systems: a corrugation carried along a load-bearing silhouette. The profile becomes a frame or arch (gable, portal, pointed or round), and the folds running along its length give it the depth to span. Where the existing patterns close into tubes, these stay open shells.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Span <b>W</b>, rise <b>H</b>, depth <b>L</b>, corrugation bays <b>n</b>, fold depth <b>A</b> (plus wall height for the portal). Width = W; Height = H (the profile rise); Length = L. The fold slider deepens the corrugation from a smooth shell to fully folded.</div>
+<div class="seqlab">Profiles</div>
+<div class="seq">Gable / Portal — pitched roof, optionally on walls (two- and three-hinged frames)</div>
+<div class="seq">Pointed arch — arch with hinged crown</div>
+<div class="seq">Round arch — semicircular at H = W⁄2, segmental for H &lt; W⁄2 (barrel vault)</div>
+<div class="seqlab">Fold mode</div>
+<div class="seq">Ridge — corrugation perpendicular to the span;  Ridge-to-valley — phase counter-runs along the span</div>
+<div class="ssrc"><b>Source.</b> H. Engel, Structure Systems / Tragsysteme — Folded Plate Structures (Faltwerke), pp. 224–227.</div>`,
+mvault:`<h2>Curved Miura vault</h2>
+<p class="sgloss">The Miura-ori corrugation wrapped onto a curved cross-section. It keeps the single-DOF auxetic fold — collapsing to a flat stack for transport — and deploys into a barrel-vault tunnel or canopy. The cut pattern is the standard developable Miura net; the curvature is added in the deployed embedding, so the unfold cuts and folds exactly.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Cells around the arch <b>n_u</b>, along the length <b>n_v</b>, cell sides <b>a</b>, <b>b</b>, angle <b>γ</b>, sweep <b>arc</b>. Width ≈ 2R·sin(arc⁄2); Height ≈ R at a semicircle (arc = 180°); Length = n_v·b·sin γ. The fold slider drives the Miura fold; sweep sets the arch from segmental through semicircle to a near-closed tube.</div>
+<div class="seqlab">Geometry</div>
+<div class="seq">Angle φ = arc·(x⁄x_max) − arc⁄2,  radius r = R + h(fold)</div>
+<div class="seq">R = x_max ⁄ arc(rad) — the vault contracts in radius as it folds</div>
+<div class="ssrc"><b>Source.</b> K. Miura, “Method of packaging and deployment of large membranes in space,” ISAS Report 618 (1985); curved / cylindrical Miura derivatives.</div>`,
+wbtube:`<h2>Waterbomb tube · magic ball</h2>
+<p class="sgloss">The waterbomb tessellation wrapped into a cylinder — the classic “magic ball.” Each waterbomb base lets a ring bulge outward or pinch to a waist, so the tube becomes a stack of faceted segments that expands radially and collapses to a tight column. It cuts as a flat strip and glues along one seam.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Units around <b>n_u</b>, tall <b>n_v</b>, cell <b>u</b>, with bulge and waist as fractions of <b>u</b>. Base radius R ≈ n_u·u⁄(2π); Diameter ≈ 2(R + bulge); Height = n_v·u. The fold slider grows the bulge from a plain faceted tube to the full magic-ball profile.</div>
+<div class="seqlab">Geometry</div>
+<div class="seq">θ = 2π·i⁄N around the seam,  radius r = R + pop(i,j)</div>
+<div class="seq">Peaks bulge out (+), ring nodes draw in (−) to form the waists</div>
+<div class="ssrc"><b>Source.</b> Traditional waterbomb tessellation / “magic ball” (J. Mosely, R. Yenn); cylindrical waterbomb deployables.</div>`,
+rdome:`<h2>Radial dome · folding gores</h2>
+<p class="sgloss">A radial-gore dome: meridian gores and concentric ring folds let a flat fan pleat up into a dome and collapse flat again — the logic of a folding umbrella or a paper lantern dome. Because a dome carries Gaussian curvature, the double curvature is gathered into the ring folds, so the fan-to-dome assembly is an approximation rather than a pure isometric unfold.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Gores <b>n_s</b>, rings <b>k_r</b>, base radius <b>R</b>, cap angle <b>φ</b>. Width = 2R; Height = R_s(1 − cos φ) with sphere radius R_s = R⁄sin φ. φ = 90° is a hemisphere; below 90° a shallow cap; above 90° an onion / ogee dome. The fold slider runs the flat fan up into the dome.</div>
+<div class="seqlab">Geometry</div>
+<div class="seq">Ring k: φ_k = φ·k⁄k_r,  ρ_k = R_s·sin φ_k,  y_k = R_s(cos φ_k − cos φ)</div>
+<div class="seq">Fan radius m_k = R_s·φ_k (arc); deploy lerps radius m_k → ρ_k and lifts height 0 → y_k</div>
+<div class="ssrc"><b>Source.</b> Radial pleated / gore domes; foldable-dome origami (C. Hoberman, T. Tachi) and lamella-dome geometry.</div>`,
+pcone:`<h2>Pleated cone · fluted tent</h2>
+<p class="sgloss">A radially-pleated cone — the tepee / yurt shelter. Alternating mountain and valley folds run from apex to rim, so a flat sector pleats up into a fluted cone and collapses to a flat fan. A cone is developable, so the cut pattern is a true flat sector; an optional twist gives the Kresling spiral.</p>
+<div class="sdims"><b>Length · Width · Height.</b> Pleats <b>N</b>, rings <b>k_r</b>, base radius <b>R</b>, height <b>H</b>, flute depth as a fraction of R. Width = 2R(1 + flute); Height = H; slant ℓ = √(R² + H²). The fold slider opens the flat sector into the cone; twist spirals the flutes.</div>
+<div class="seqlab">Geometry</div>
+<div class="seq">Ring k: radius alternates R·k⁄k_r ± flute·R·k⁄k_r across 2N facets; height H(1 − k⁄k_r)</div>
+<div class="seq">Sector angle Θ = (base star perimeter) ⁄ ℓ — the pleats gather the missing wedge</div>
+<div class="ssrc"><b>Source.</b> Radial pleated cones (fluted / lampshade folding); Kresling twist-cone deployables.</div>`
+};
+document.getElementById('sciBtn').onclick=()=>{ document.getElementById('sciBody').innerHTML=SCI[cur]||'<h2>—</h2>'; document.getElementById('sciModal').style.display='flex'; };
+document.getElementById('sciClose').onclick=()=>document.getElementById('sciModal').style.display='none';
+document.getElementById('sciModal').onclick=e=>{ if(e.target.id==='sciModal')document.getElementById('sciModal').style.display='none'; };
+document.addEventListener('keydown',e=>{ if(e.key==='Escape')document.getElementById('sciModal').style.display='none'; });
+
+/* ====================== NUMBER SPINNERS · 3ds-max style ====================== */
+let _scrub=null,_scrubY=0,_scrubAcc=0;
+window.addEventListener('mousemove',e=>{ if(!_scrub)return; const dy=_scrubY-e.clientY; _scrubY=e.clientY; _scrubAcc+=dy; const n=Math.trunc(_scrubAcc/3); if(n){ _scrub(n); _scrubAcc-=n*3; } });
+window.addEventListener('mouseup',()=>{ _scrub=null; });
+function spinner(input){ if(!input||input.dataset.spun)return; input.dataset.spun='1';
+  const wrap=document.createElement('span'); wrap.className='spin';
+  input.parentNode.insertBefore(wrap,input); wrap.appendChild(input);
+  const btns=document.createElement('span'); btns.className='spinbtns';
+  const up=document.createElement('button'); up.type='button'; up.tabIndex=-1; up.textContent='\u25B2';
+  const dn=document.createElement('button'); dn.type='button'; dn.tabIndex=-1; dn.textContent='\u25BC';
+  btns.appendChild(up); btns.appendChild(dn); wrap.appendChild(btns);
+  const step=parseFloat(input.step)||1, mn=input.min!==''?parseFloat(input.min):-Infinity, mx=input.max!==''?parseFloat(input.max):Infinity;
+  const dec=(String(step).split('.')[1]||'').length;
+  function bump(k){ let v=(parseFloat(input.value)||0)+k*step; v=Math.min(mx,Math.max(mn,v)); input.value=dec?v.toFixed(dec):String(Math.round(v)); input.dispatchEvent(new Event('input',{bubbles:true})); }
+  function hold(b,k){ let to,iv; const go=e=>{ e.preventDefault(); bump(k); to=setTimeout(()=>{ iv=setInterval(()=>bump(k),60); },340); }; const stop=()=>{ clearTimeout(to); clearInterval(iv); };
+    b.addEventListener('mousedown',go); b.addEventListener('mouseup',stop); b.addEventListener('mouseleave',stop); b.addEventListener('touchstart',go,{passive:false}); b.addEventListener('touchend',stop); }
+  hold(up,1); hold(dn,-1);
+  btns.addEventListener('mousedown',e=>{ if(e.target!==btns)return; _scrub=bump; _scrubY=e.clientY; _scrubAcc=0; e.preventDefault(); });
+}
+document.querySelectorAll('.xyz input').forEach(spinner);
+
+/* throttle rebuilds so high parameter counts stay responsive */
+let _bldReq=0,_bldRefit=false;
+function scheduleBuild(refit){ _bldRefit=_bldRefit||!!refit; if(_bldReq)return; _bldReq=requestAnimationFrame(()=>{ _bldReq=0; const r=_bldRefit; _bldRefit=false; buildModel(r); }); }
+
+/* ====================== GIZMO · reference space + size ====================== */
+function setSpace(s){ document.getElementById('spWorld').classList.toggle('on',s==='world'); document.getElementById('spLocal').classList.toggle('on',s==='local'); if(tc)tc.setSpace(s); }
+document.getElementById('spWorld').onclick=()=>setSpace('world');
+document.getElementById('spLocal').onclick=()=>setSpace('local');
+let _gz=0.85;
+document.getElementById('gzPlus').onclick=()=>{ _gz=Math.min(2.5,_gz+0.15); if(tc)tc.setSize(_gz); };
+document.getElementById('gzMinus').onclick=()=>{ _gz=Math.max(0.35,_gz-0.15); if(tc)tc.setSize(_gz); };
+
+/* ====================== PAPER · unfold sheet + print ====================== */
+const PAPER={A4:[210,297],A3:[297,420],A2:[420,594],A1:[594,841],A0:[841,1189],Letter:[215.9,279.4],Legal:[215.9,355.6],Tabloid:[279.4,431.8]};
+const paper={size:'A4',land:false,margin:10,actual:false,cw:210,ch:297};
+function pageDims(){ let pw,ph; if(paper.size==='Custom'){ pw=paper.cw||210; ph=paper.ch||297; } else { const d=PAPER[paper.size]||PAPER.A4; pw=d[0]; ph=d[1]; } if(paper.land){ const t=pw; pw=ph; ph=t; } return [pw,ph]; }
+function buildSheetSVG(opt){ opt=opt||{}; const screen=!!opt.screen; const F=model.v2,C=model.creases;
+  let mn=[1e9,1e9],mx=[-1e9,-1e9]; for(const v of F){ mn[0]=Math.min(mn[0],v[0]); mn[1]=Math.min(mn[1],v[1]); mx[0]=Math.max(mx[0],v[0]); mx[1]=Math.max(mx[1],v[1]); }
+  const w=mx[0]-mn[0]||1, h=mx[1]-mn[1]||1;
+  const [pw,ph]=pageDims(); const m=Math.max(0,paper.margin); const aw=Math.max(1,pw-2*m), ah=Math.max(1,ph-2*m);
+  const fit=Math.min(aw/w,ah/h); const s=paper.actual?1:fit;
+  const dw=w*s, dh=h*s; const ox=(pw-dw)/2, oy=(ph-dh)/2;
+  const sw=(Math.max(pw,ph)/400)/s;
+  let lines='';
+  for(const layer of ['B','M','V']){ lines+=`<g stroke="${creaseColor(layer)}" fill="none" stroke-linecap="round">`;
+    for(const [a,b,tp] of C){ if(tp!==layer)continue; const dash=tp==='V'?`stroke-dasharray="${(sw*4).toFixed(2)} ${(sw*3).toFixed(2)}"`:'';
+      lines+=`<line x1="${F[a][0].toFixed(2)}" y1="${F[a][1].toFixed(2)}" x2="${F[b][0].toFixed(2)}" y2="${F[b][1].toFixed(2)}" stroke-width="${(tp==='B'?sw*1.7:sw*1.1).toFixed(3)}" ${dash}/>`; }
+    lines+='</g>'; }
+  const tx=ox - s*mn[0], ty=oy + s*mx[1];
+  const patternG=`<g transform="matrix(${s.toFixed(5)} 0 0 ${(-s).toFixed(5)} ${tx.toFixed(3)} ${ty.toFixed(3)})">${lines}</g>`;
+  const pageRect=`<rect x="0" y="0" width="${pw}" height="${ph}" fill="${screen?'#0b1120':'#ffffff'}" stroke="${screen?'#2a3658':'#cccccc'}" stroke-width="0.4"/>`;
+  const marginRect=`<rect x="${m}" y="${m}" width="${aw}" height="${ah}" fill="none" stroke="${screen?'#3a4a78':'#e0e0e0'}" stroke-width="0.3" stroke-dasharray="3 2"/>`;
+  const overflow=(paper.actual && (dw>aw+0.5||dh>ah+0.5));
+  const tcol=screen?'#9fb0d0':'#444444';
+  const cap=`${GEN[cur].label} \u00B7 ${paper.size}${paper.land?' landscape':' portrait'} \u00B7 ${paper.actual?'1:1':(s*100).toFixed(0)+'%'} \u00B7 ${dw.toFixed(0)}\u00D7${dh.toFixed(0)} mm \u00B7 fold ${(foldT*100).toFixed(0)}% \u00B7 M solid / V dashed / cut grey`;
+  const title=`<text x="${m}" y="${(ph-m+(m>7?-2.5:4)).toFixed(1)}" font-family="Helvetica,Arial,sans-serif" font-size="3.2" fill="${tcol}">${cap}</text><text x="${(pw-m).toFixed(1)}" y="${(ph-m+(m>7?-2.5:4)).toFixed(1)}" text-anchor="end" font-family="Helvetica,Arial,sans-serif" font-size="2.8" fill="${tcol}" opacity="0.85">Developed by Dr. Samer El Sayary © All Rights Reserved</text>`;
+  const warn=overflow?`<text x="${(pw/2).toFixed(1)}" y="${(ph/2).toFixed(1)}" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-size="5" fill="#c0392b" opacity="0.55">pattern exceeds printable area \u2014 use Fit to page or a larger sheet</text>`:'';
+  const inner=`${pageRect}${marginRect}${patternG}${title}${warn}`;
+  return {inner,pw,ph,s,dw,dh,overflow};
+}
+function updatePaperInfo(sh){ if(!model)return; sh=sh||buildSheetSVG({screen:true});
+  document.getElementById('paperInfo').innerHTML=`Page <b>${sh.pw}\u00D7${sh.ph} mm</b> \u00B7 printable ${(sh.pw-2*paper.margin).toFixed(0)}\u00D7${(sh.ph-2*paper.margin).toFixed(0)} mm \u00B7 pattern at <b>${paper.actual?'1:1':(sh.s*100).toFixed(0)+'%'}</b> = ${sh.dw.toFixed(0)}\u00D7${sh.dh.toFixed(0)} mm${sh.overflow?' \u00B7 <span style="color:var(--mountain)">exceeds page</span>':''}`; }
+function printSheet(){ if(!model)return; const sh=buildSheetSVG({screen:false});
+  document.getElementById('pagestyle').textContent=`@page{size:${sh.pw}mm ${sh.ph}mm;margin:0}`;
+  document.getElementById('printroot').innerHTML=`<svg xmlns="http://www.w3.org/2000/svg" width="${sh.pw}mm" height="${sh.ph}mm" viewBox="0 0 ${sh.pw} ${sh.ph}">${sh.inner}</svg>`;
+  setTimeout(()=>window.print(),60);
+}
+document.getElementById('paperSize').onchange=e=>{ paper.size=e.target.value; document.getElementById('customWrap').style.display=paper.size==='Custom'?'grid':'none'; renderPreview(); updatePaperInfo(); };
+document.getElementById('paperW').oninput=e=>{ paper.cw=Math.max(20,+e.target.value||210); renderPreview(); updatePaperInfo(); };
+document.getElementById('paperH').oninput=e=>{ paper.ch=Math.max(20,+e.target.value||297); renderPreview(); updatePaperInfo(); };
+function orient(l){ paper.land=l; document.getElementById('orP').classList.toggle('on',!l); document.getElementById('orL').classList.toggle('on',l); renderPreview(); updatePaperInfo(); }
+document.getElementById('orP').onclick=()=>orient(false); document.getElementById('orL').onclick=()=>orient(true);
+function scaleMode(a){ paper.actual=a; document.getElementById('scFit').classList.toggle('on',!a); document.getElementById('scAct').classList.toggle('on',a); renderPreview(); updatePaperInfo(); }
+document.getElementById('scFit').onclick=()=>scaleMode(false); document.getElementById('scAct').onclick=()=>scaleMode(true);
+document.getElementById('paperM').oninput=e=>{ paper.margin=Math.max(0,Math.min(60,+e.target.value||0)); renderPreview(); updatePaperInfo(); };
+document.getElementById('showPage').onchange=e=>{ flags.page=e.target.checked; renderPreview(); };
+document.getElementById('printBtn').onclick=printSheet;
+spinner(document.getElementById('paperM'));
+
+/* ====================== PROJECT · save / load ====================== */
+function saveProject(){
+  const st={ app:'ORU', version:1, credit:'Developed by Dr. Samer El Sayary © All Rights Reserved',
+    pattern:cur, params:Object.assign({},params), fold:foldT,
+    deform:Object.assign({},deform),
+    transform:{ pos:[group.position.x,group.position.y,group.position.z],
+      rot:[group.rotation.x*180/PI,group.rotation.y*180/PI,group.rotation.z*180/PI],
+      scl:[group.scale.x,group.scale.y,group.scale.z] },
+    paper:Object.assign({},paper), flags:Object.assign({},flags), cap:capEnds };
+  dl(`ORU_${cur}_project.json`, JSON.stringify(st,null,1), 'application/json');
+}
+function syncPaperUI(){ const g=id=>document.getElementById(id);
+  g('paperSize').value=paper.size; g('customWrap').style.display=paper.size==='Custom'?'grid':'none';
+  if(paper.size==='Custom'){ g('paperW').value=paper.cw; g('paperH').value=paper.ch; }
+  g('orP').classList.toggle('on',!paper.land); g('orL').classList.toggle('on',paper.land);
+  g('scFit').classList.toggle('on',!paper.actual); g('scAct').classList.toggle('on',paper.actual);
+  g('paperM').value=paper.margin; g('showPage').checked=!!flags.page; }
+function loadProject(file){ const r=new FileReader();
+  r.onload=()=>{ let st; try{ st=JSON.parse(r.result); }catch(_){ alert('That file is not a valid ORU project (.json).'); return; }
+    if(!st||!st.pattern||!GEN[st.pattern]){ alert('Unrecognized project file.'); return; }
+    selectPattern(st.pattern);
+    if(st.params) GEN[st.pattern].params.forEach(p=>{ if(st.params[p.k]!=null) params[p.k]=(p.type==='choice'?st.params[p.k]:+st.params[p.k]); });
+    if(st.deform){ for(const k in deform){ if(st.deform[k]!=null) deform[k]=st.deform[k]; } }
+    if(typeof st.fold==='number'){ foldT=clamp(st.fold,0,1); document.getElementById('fold').value=Math.round(foldT*1000); }
+    if(st.flags){ for(const k in flags){ if(typeof st.flags[k]==='boolean') flags[k]=st.flags[k]; } }
+    if(st.paper){ for(const k in paper){ if(st.paper[k]!=null) paper[k]=st.paper[k]; } }
+    if(st.transform){ const tr=st.transform;
+      if(tr.pos) group.position.set(tr.pos[0],tr.pos[1],tr.pos[2]);
+      if(tr.rot) group.rotation.set(d2r(tr.rot[0]),d2r(tr.rot[1]),d2r(tr.rot[2]));
+      if(tr.scl) group.scale.set(tr.scl[0],tr.scl[1],tr.scl[2]); }
+    capEnds=!!st.cap; document.getElementById('capEnds').checked=capEnds;
+    renderParams(); renderDeform(); document.getElementById('dfAxis').value=deform.axis; syncPaperUI();
+    buildModel(true); syncTF(); updatePaperInfo(); };
+  r.readAsText(file); }
+document.getElementById('saveProj').onclick=saveProject;
+document.getElementById('loadProj').onclick=()=>document.getElementById('loadFile').click();
+document.getElementById('loadFile').onchange=e=>{ const f=e.target.files[0]; if(f) loadProject(f); e.target.value=''; };
+document.getElementById('capEnds').onchange=e=>{ capEnds=e.target.checked; scheduleBuild(false); };
+
+/* init */
+resize(); applyCam(); selectPattern('miura'); updatePaperInfo(); animate();
+</script>
+</body>
+</html>
